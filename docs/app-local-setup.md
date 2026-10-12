@@ -87,4 +87,4 @@ npm run test
 npm run build
 ```
 
-The local API uses SQLite and scans eligible rows in memory for search. That is suitable for the initial bounded catalogue, not a large production catalogue. Measure query latency and add database-side filtering/pagination when scale requires it. The web project currently has no persistent analytics or shopper accounts.
+The local API filters approved sources, category, active state, HUF, priced offers, and stock in SQLite. It keeps exact Decimal budgets, Unicode text matching, colour/size checks, freshness, sorting, and cursor pages in memory over those candidates. Measure query latency and move the remaining work to a suitable index when scale requires it. The web project currently has no persistent analytics or shopper accounts.

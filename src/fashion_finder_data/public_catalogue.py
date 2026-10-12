@@ -7,8 +7,10 @@ import binascii
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
+
+from django.db.models import Q
 
 from .schema import is_hungarian_source_url
 from .source_policy import SourcePolicy
@@ -34,7 +36,22 @@ def _visible(
         or not is_hungarian_source_url(row["source_key"], row["source_url"])
     ):
         return None
-    if _utc(row["source_fetched_at"]) + timedelta(hours=policy.freshness_hours) < now:
+    try:
+        price = Decimal(row["price_amount"])
+        checked_at = _utc(row["source_fetched_at"])
+        colours = json.loads(row["colour_names"])
+        sizes = json.loads(row["size_options"])
+        images = json.loads(row["image_urls"]) if policy.allow_image_display else []
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not price.is_finite() or price < 0:
+        return None
+    if any(
+        not isinstance(values, list) or any(not isinstance(item, str) for item in values)
+        for values in (colours, sizes, images)
+    ):
+        return None
+    if checked_at > now or checked_at + timedelta(hours=policy.freshness_hours) < now:
         return None
     return policy
 
@@ -59,8 +76,46 @@ def _public_offer(row: dict[str, Any], policy: SourcePolicy) -> dict[str, Any]:
     }
 
 
-def _rows(engine: Database) -> list[dict[str, Any]]:
-    return offer_rows(engine)
+def _approved_pairs(
+    policies: dict[tuple[str, str], SourcePolicy], source: str | None = None
+) -> list[tuple[str, str]]:
+    return [
+        (key, market)
+        for (key, market), policy in policies.items()
+        if policy.approval_status == "approved"
+        and policy.allow_public_listing
+        and (source is None or key == source)
+    ]
+
+
+def _rows(
+    engine: Database,
+    policies: dict[tuple[str, str], SourcePolicy],
+    *,
+    source: str | None = None,
+    category: str | None = None,
+    offer_id: int | None = None,
+) -> list[dict[str, Any]]:
+    pairs = _approved_pairs(policies, source)
+    if not pairs:
+        return []
+    approved = Q()
+    for key, market in pairs:
+        approved |= Q(retailer__source_key=key, retailer__market_code=market)
+    filters: dict[str, Any] = {
+        "status": "active",
+        "currency": "HUF",
+        "price_amount__isnull": False,
+    }
+    if category:
+        filters["category"] = category
+    if offer_id is not None:
+        filters["id"] = offer_id
+    return offer_rows(
+        engine,
+        predicate=approved & ~Q(availability_status="out_of_stock"),
+        **filters,
+    )
 
 
 def public_offer(
@@ -71,10 +126,9 @@ def public_offer(
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     current = now or datetime.now(UTC)
-    for row in _rows(engine):
-        if row["id"] == offer_id:
-            policy = _visible(row, policies, current)
-            return _public_offer(row, policy) if policy else None
+    for row in _rows(engine, policies, offer_id=offer_id):
+        policy = _visible(row, policies, current)
+        return _public_offer(row, policy) if policy else None
     return None
 
 
@@ -103,7 +157,7 @@ def search_public_catalogue(
     fingerprint = hashlib.sha256(json.dumps(filters).encode()).hexdigest()[:16]
     current = now or datetime.now(UTC)
     matches: list[tuple[dict[str, Any], SourcePolicy]] = []
-    for row in _rows(engine):
+    for row in _rows(engine, policies, source=source, category=category):
         policy = _visible(row, policies, current)
         if policy is None:
             continue

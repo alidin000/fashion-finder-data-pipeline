@@ -18,6 +18,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.management import call_command
 from django.db import connections, transaction
+from django.db.models import Q
 
 from .schema import RetailerOffer as ParsedOffer
 from .taxonomy import normalize_category
@@ -91,10 +92,14 @@ def _money_text(value: Decimal | None) -> str | None:
     return format(value.normalize(), "f") if value is not None else None
 
 
-def offer_rows(database: Database, **filters: Any) -> list[dict[str, Any]]:
-    """Return joined rows in the legacy export shape."""
+def offer_rows(
+    database: Database, *, predicate: Q | None = None, **filters: Any
+) -> list[dict[str, Any]]:
+    """Return joined rows after database-side filtering."""
     _, Offer, _, _ = _models()
     query = Offer.objects.using(database.alias).select_related("retailer").filter(**filters)
+    if predicate is not None:
+        query = query.filter(predicate)
     rows = []
     for offer in query:
         row = {

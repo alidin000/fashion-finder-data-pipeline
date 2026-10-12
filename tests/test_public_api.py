@@ -8,10 +8,13 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
+from django.db import connections
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from PIL import Image
 
 from fashion_finder_data.api.views import api_context
+from fashion_finder_data.catalogue.models import RetailerOffer as StoredOffer
 from fashion_finder_data.schema import RetailerOffer
 from fashion_finder_data.source_policy import SourcePolicy, load_policies
 from fashion_finder_data.storage import open_database, upsert_offer
@@ -213,3 +216,53 @@ def test_local_web_origin_preflight_is_explicit_and_other_origins_are_denied(
     assert allowed.status_code == 204
     assert allowed["Access-Control-Allow-Origin"] == "http://localhost:3000"
     assert "Access-Control-Allow-Origin" not in denied
+
+
+def test_public_queries_filter_approved_source_and_category_in_sql(tmp_path) -> None:
+    db_path = tmp_path / "catalog.sqlite"
+    database = open_database(db_path)
+    now = datetime.now(UTC)
+    add_offer(database, "approved", "10000", now)
+    add_offer(database, "unapproved", "8000", now, source="zara")
+    path = policy_file(tmp_path)
+    with ApiRequester(db_path, path) as client:
+        with CaptureQueriesContext(connections[database.alias]) as queries:
+            response = client.get(
+                "/api/v1/search", params={"source": "reserved", "category": "jackets"}
+            )
+        assert [item["source_product_id"] for item in response.json()["items"]] == ["approved"]
+        offer_queries = [
+            query["sql"] for query in queries if 'FROM "retailer_offer"' in query["sql"]
+        ]
+        assert len(offer_queries) == 1
+        assert '"retailer"."source_key"' in offer_queries[0]
+        assert '"retailer_offer"."category"' in offer_queries[0]
+        with CaptureQueriesContext(connections[database.alias]) as denied_queries:
+            denied = client.get("/api/v1/search", params={"source": "zara"})
+        assert denied.json()["items"] == []
+        assert not any('FROM "retailer_offer"' in query["sql"] for query in denied_queries)
+
+
+def test_bad_legacy_offer_is_hidden_without_breaking_other_results(tmp_path) -> None:
+    db_path = tmp_path / "catalog.sqlite"
+    database = open_database(db_path)
+    now = datetime.now(UTC)
+    add_offer(database, "good", "10000", now)
+    add_offer(database, "bad-price", "8000", now)
+    add_offer(database, "bad-time", "7000", now)
+    add_offer(database, "bad-colours", "6000", now)
+    StoredOffer.objects.using(database.alias).filter(source_product_id="bad-price").update(
+        price_amount="NaN"
+    )
+    StoredOffer.objects.using(database.alias).filter(source_product_id="bad-time").update(
+        source_fetched_at="not-a-date"
+    )
+    StoredOffer.objects.using(database.alias).filter(source_product_id="bad-colours").update(
+        colour_names="{"
+    )
+    with ApiRequester(db_path, policy_file(tmp_path)) as client:
+        response = client.get("/api/v1/search")
+        assert response.status_code == 200
+        assert [item["source_product_id"] for item in response.json()["items"]] == ["good"]
+        bad_id = StoredOffer.objects.using(database.alias).get(source_product_id="bad-time").id
+        assert client.get(f"/api/v1/offers/{bad_id}").status_code == 404

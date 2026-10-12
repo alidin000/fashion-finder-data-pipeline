@@ -54,6 +54,12 @@ class RetailerOffer(models.Model):
                 fields=["retailer", "canonical_url"], name="offer_retailer_url"
             ),
         )
+        indexes = (
+            models.Index(
+                fields=["retailer", "status", "currency", "category"],
+                name="offer_public_filter_idx",
+            ),
+        )
 
     def __str__(self):
         return self.title

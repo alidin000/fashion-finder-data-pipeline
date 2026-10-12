@@ -67,6 +67,9 @@ def test_legacy_sqlite_adoption_preserves_rows_and_supports_new_writes(tmp_path)
     assert PriceObservation.objects.using(database.alias).count() == 1
     assert CollectionRun.objects.using(database.alias).get(pk="run-1").records_parsed == 0
     assert connections[database.alias].introspection.table_names().count("retailer_offer") == 1
+    with sqlite3.connect(path) as connection:
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list(retailer_offer)")}
+    assert "offer_public_filter_idx" in indexes
     upsert_offer(
         database,
         ParsedOffer(
