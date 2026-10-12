@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit
 import scrapy
 from scrapy.crawler import CrawlerProcess
 from scrapy.http import Response
+from scrapy_playwright.page import PageMethod
 
 from .schema import RawProductRecord, utc_now
 
@@ -263,6 +264,8 @@ class ProductSpider(scrapy.Spider):
         state: CrawlState,
         limit: int,
         overrides: dict[str, list[str]] | None = None,
+        browser: bool = False,
+        browser_wait_ms: int = 1500,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -270,6 +273,8 @@ class ProductSpider(scrapy.Spider):
         self.state = state
         self.limit = limit
         self.overrides = overrides or {}
+        self.browser = browser
+        self.browser_wait_ms = browser_wait_ms
         self.allowed_domains = [source.host for source in sources]
         self.scheduled_products: dict[str, set[str]] = {source.key: set() for source in sources}
 
@@ -283,6 +288,17 @@ class ProductSpider(scrapy.Spider):
         scheduled.add(url)
         self.state.discovered[source_key] = self.state.discovered.get(source_key, 0) + 1
         return True
+
+    def _request_meta(self, source_key: str) -> dict[str, Any]:
+        meta: dict[str, Any] = {"source_key": source_key}
+        if self.browser:
+            meta["playwright"] = True
+            meta["playwright_page_goto_kwargs"] = {"wait_until": "domcontentloaded"}
+            if self.browser_wait_ms:
+                meta["playwright_page_methods"] = [
+                    PageMethod("wait_for_timeout", self.browser_wait_ms)
+                ]
+        return meta
 
     def start_requests(self):
         for source in self.sources:
@@ -302,7 +318,7 @@ class ProductSpider(scrapy.Spider):
                     callback=self.parse_page,
                     errback=self.failed,
                     cb_kwargs={"source": source},
-                    meta={"source_key": source.key},
+                    meta=self._request_meta(source.key),
                 )
 
     async def start(self):
@@ -314,7 +330,13 @@ class ProductSpider(scrapy.Spider):
         source = failure.request.meta["source_key"]
         response = getattr(failure.value, "response", None)
         status = f" HTTP {response.status}" if response is not None else ""
-        self.state.error(source, f"request failed: {type(failure.value).__name__}{status}")
+        lines = str(failure.value).strip().splitlines()
+        detail = lines[0][:300] if lines else ""
+        fatal = next((line.strip() for line in lines if "FATAL:" in line), "")
+        if fatal and fatal != detail:
+            detail += f" | {fatal[:200]}"
+        suffix = f": {detail}" if detail else ""
+        self.state.error(source, f"request failed: {type(failure.value).__name__}{status}{suffix}")
 
     def parse_page(self, response: Response, source: Source):
         source = source_for_page(source, response.url)
@@ -369,7 +391,7 @@ class ProductSpider(scrapy.Spider):
                 callback=self.parse_product,
                 errback=self.failed,
                 cb_kwargs={"source": source},
-                meta={"source_key": source.key},
+                meta=self._request_meta(source.key),
             )
 
     def parse_product(self, response: Response, source: Source) -> None:
@@ -380,28 +402,53 @@ class ProductSpider(scrapy.Spider):
 
 
 def crawl(
-    sources: list[Source], limit: int, overrides: dict[str, list[str]] | None = None
+    sources: list[Source],
+    limit: int,
+    overrides: dict[str, list[str]] | None = None,
+    browser: bool = False,
+    browser_wait_ms: int = 1500,
 ) -> CrawlState:
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
+    if not 0 <= browser_wait_ms <= 10000:
+        raise ValueError("browser wait must be between 0 and 10000 milliseconds")
     state = CrawlState()
-    process = CrawlerProcess(
-        settings={
-            "BOT_NAME": "fashion_finder_data",
-            "USER_AGENT": "FashionFinderResearch/0.1 (+local bounded collection)",
-            "ROBOTSTXT_OBEY": True,
-            "DOWNLOAD_DELAY": 10,
-            "DOWNLOAD_DELAY_JITTER": 0,
-            "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
-            "DOWNLOAD_TIMEOUT": 20,
-            "RETRY_TIMES": 1,
-            "LOG_LEVEL": "INFO",
-            "COOKIES_ENABLED": False,
-            "TELNETCONSOLE_ENABLED": False,
-            "REMOTE_CONTROL_ENABLED": False,
-        }
+    settings: dict[str, Any] = {
+        "BOT_NAME": "fashion_finder_data",
+        "USER_AGENT": "FashionFinderResearch/0.1 (+local bounded collection)",
+        "ROBOTSTXT_OBEY": True,
+        "DOWNLOAD_DELAY": 10,
+        "DOWNLOAD_DELAY_JITTER": 0,
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
+        "DOWNLOAD_TIMEOUT": 30 if browser else 20,
+        "RETRY_TIMES": 1,
+        "LOG_LEVEL": "INFO",
+        "COOKIES_ENABLED": False,
+        "TELNETCONSOLE_ENABLED": False,
+        "REMOTE_CONTROL_ENABLED": False,
+    }
+    if browser:
+        settings.update(
+            {
+                "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
+                "DOWNLOAD_HANDLERS": {
+                    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+                },
+                "PLAYWRIGHT_BROWSER_TYPE": "chromium",
+                "PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT": 20000,
+                "PLAYWRIGHT_MAX_PAGES_PER_CONTEXT": 1,
+            }
+        )
+    process = CrawlerProcess(settings=settings)
+    process.crawl(
+        ProductSpider,
+        sources=sources,
+        state=state,
+        limit=limit,
+        overrides=overrides,
+        browser=browser,
+        browser_wait_ms=browser_wait_ms,
     )
-    process.crawl(ProductSpider, sources=sources, state=state, limit=limit, overrides=overrides)
     process.start()
     for source in sources:
         if not state.records.get(source.key) and not state.errors.get(source.key):

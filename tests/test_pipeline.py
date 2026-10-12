@@ -6,11 +6,13 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from scrapy.http import HtmlResponse, Request
 from sqlalchemy import func, select
 
+from fashion_finder_data.cli import make_parser
 from fashion_finder_data.collectors import (
     SOURCES,
     CrawlState,
@@ -141,6 +143,46 @@ def test_limit_also_bounds_direct_product_start_urls() -> None:
     spider = ProductSpider([source], state, 2, overrides={"reserved": urls})
     assert [request.url for request in spider.start_requests()] == urls[:2]
     assert state.discovered["reserved"] == 2
+
+
+def test_browser_mode_renders_start_and_product_requests_with_shared_limit() -> None:
+    source = SOURCES["reserved"]
+    category_url = "https://www.reserved.com/hu/hu/noi/kabatok"
+    body = f'<article class="es-product"><a class="es-product-photo" href="{URL}"></a></article>'
+    spider = ProductSpider([source], CrawlState(), 1, browser=True, browser_wait_ms=2500)
+    start = list(spider.start_requests())
+    product = list(spider.parse_page(response(category_url, body), source))
+    assert len(start) == len(product) == 1
+    for request in start + product:
+        assert request.meta["source_key"] == "reserved"
+        assert request.meta["playwright"] is True
+        assert request.meta["playwright_page_goto_kwargs"] == {"wait_until": "domcontentloaded"}
+        assert request.meta["playwright_page_methods"][0].args == (2500,)
+    assert product[0].url == URL
+    assert spider.state.discovered["reserved"] == 1
+    assert list(spider.parse_page(response(category_url, body), source)) == []
+
+
+def test_http_collection_does_not_mark_requests_for_browser() -> None:
+    source = SOURCES["reserved"]
+    spider = ProductSpider([source], CrawlState(), 1)
+    assert "playwright" not in next(spider.start_requests()).meta
+    options = make_parser().parse_args(["collect", "zara", "--browser", "--limit", "1"])
+    assert options.browser is True
+    assert options.source == "zara"
+
+
+def test_browser_launch_failure_reports_runtime_cause() -> None:
+    spider = ProductSpider([SOURCES["reserved"]], CrawlState(), 1, browser=True)
+    request = next(spider.start_requests())
+    failure = SimpleNamespace(
+        request=request,
+        value=RuntimeError(
+            "BrowserType.launch: page closed\n[pid=15][err] FATAL: Operation not permitted"
+        ),
+    )
+    spider.failed(failure)
+    assert "FATAL: Operation not permitted" in spider.state.errors["reserved"][0]
 
 
 def test_product_extraction_error_is_preserved() -> None:

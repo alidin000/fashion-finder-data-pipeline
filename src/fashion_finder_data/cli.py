@@ -33,6 +33,15 @@ def make_parser() -> argparse.ArgumentParser:
     collect.add_argument(
         "--url", action="append", help="Starting category or product URL; one source only"
     )
+    collect.add_argument(
+        "--browser", action="store_true", help="Render pages with Chromium before extraction"
+    )
+    collect.add_argument(
+        "--browser-wait-ms",
+        type=int,
+        default=1500,
+        help="Time to allow page scripts to render (0–10000; default: 1500)",
+    )
     ingest = commands.add_parser("ingest", help="Replay a raw JSONL snapshot")
     ingest.add_argument("source", choices=SOURCES)
     ingest.add_argument("path", type=Path)
@@ -76,11 +85,19 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--limit must be between 1 and 100")
         if args.source == "all" and args.url:
             parser.error("--url can only be used with one source")
+        if not 0 <= args.browser_wait_ms <= 10000:
+            parser.error("--browser-wait-ms must be between 0 and 10000")
     engine = open_database(args.data_dir / "fashion_finder.sqlite")
     if args.command == "collect":
         selected = list(SOURCES.values()) if args.source == "all" else [SOURCES[args.source]]
         started_at = utc_now().isoformat()
-        state = crawl(selected, args.limit, {args.source: args.url} if args.url else None)
+        state = crawl(
+            selected,
+            args.limit,
+            {args.source: args.url} if args.url else None,
+            browser=args.browser,
+            browser_wait_ms=args.browser_wait_ms,
+        )
         reports = [
             ingest_records(
                 engine,

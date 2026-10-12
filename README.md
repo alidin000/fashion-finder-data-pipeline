@@ -33,7 +33,7 @@ See [live Hungarian source status](docs/live-source-status.md) for the latest bo
 
 - Python 3.12
 - Scrapy (robots-aware HTTP collection)
-- Playwright for Python (optional investigation of rendered pages; the current pipeline does not rely on a browser)
+- Playwright for Python (optional Chromium rendering in the collector and diagnostics)
 - Pydantic for schema validation
 - SQLAlchemy + SQLite for local persistence
 - JSONL for raw snapshots and portable exports
@@ -57,7 +57,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
-# Optional: only for browser-rendering investigation
+# Required for --browser collection and browser diagnostics
 python -m playwright install chromium
 ```
 
@@ -68,13 +68,26 @@ fashion-finder sources list
 fashion-finder collect reserved --limit 1
 fashion-finder collect all --limit 1
 fashion-finder collect reserved --limit 3 --url https://www.reserved.com/hu/hu/noi/ruhak
+fashion-finder collect zara --browser --limit 3
+fashion-finder collect hm --browser --limit 3
+fashion-finder collect pullandbear --browser --limit 3
 fashion-finder report <run-id>
 fashion-finder export data/exports/catalogue.csv
 ```
 
 `collect all` reports each retailer independently and exits nonzero when any source fails. Use `--url https://...` with a single source to test a specific Hungarian category or product URL. Only HTTPS pages on that retailer's Hungarian storefront are accepted. The CLI never logs in, solves CAPTCHAs, or works around HTTP 403.
 
-To check whether a normal Chromium browser can see one category from your machine,
+`--browser` renders both category and product pages in Chromium before the existing
+parsers run. Scrapy checks `robots.txt` before each top-level navigation. Its
+ten-second request delay applies to those navigations; Chromium also loads page
+assets such as scripts and images. The per-source product limit, local storage,
+and run reports still apply. The collector waits
+1.5 seconds for scripts after each navigation; adjust with `--browser-wait-ms 3000`
+(0–10000) if a page renders slowly. Run each blocked source separately to see its
+own report. Browser mode has not produced verified records for Zara, H&M, or
+Pull&Bear; a browser may still receive HTTP 403 or pages without usable prices.
+
+To check whether a normal Chromium browser can see one category without importing data,
 run `python scripts/browser_diagnostic.py zara` after installing Chromium with
 `python -m playwright install chromium`. Repeat with `hm` or `pullandbear`.
 It reports the HTTP status and visible product link/price counts without importing
