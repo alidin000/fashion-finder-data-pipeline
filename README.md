@@ -78,6 +78,17 @@ fashion-finder search --category dresses --source reserved --sort recent --limit
 
 Search returns JSONL with source links, prices, category, image URLs, and last-seen time. The default currency is HUF; use `--currency` for another stored currency. Budget comparisons and price sorting use exact decimal values within one currency. Results reflect the last collection, so unknown stock remains `unknown`.
 
+Known English and Hungarian category labels map to shared keys such as `coats`, `jackets`, `dresses`, `sweaters`, and `shirts`. The original label is kept as `source_category`. Unknown labels stay unclassified and appear in quality reports instead of being guessed. Opening an older SQLite database adds `source_category` and maps its existing category values once.
+
+Check freshness and field quality by retailer and category:
+
+```powershell
+fashion-finder quality --stale-after-days 7
+fashion-finder quality --output data/reports/quality-check.json
+```
+
+The report counts old observations, missing fields, unmapped categories, malformed stored values, and unknown availability. It does not contact retailers or change offer status. An old observation means the listing needs another check; it does not prove the item was removed or sold out. `--output` creates a new JSON file and refuses to overwrite an existing one.
+
 To replay a raw file without network access:
 
 ```powershell

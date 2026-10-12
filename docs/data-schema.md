@@ -17,7 +17,8 @@ One record per retailer listing/offer. Do not assume two visually similar record
 - canonical_url — normalized URL for deduplication where safe
 - title
 - brand
-- category and category_path
+- category — shared key for recognized categories, otherwise null
+- source_category — original source label, including labels outside the current taxonomy
 - description — nullable
 - price_amount — Decimal, nullable
 - currency — ISO currency code, nullable if not confidently known

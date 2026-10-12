@@ -44,6 +44,7 @@ Retailer / feed / search-results source
 ### 3. Normalization
 - Convert fields into a common schema.
 - Normalize numeric prices and ISO currency codes.
+- Map known category labels to shared keys and preserve the original label.
 - Preserve source-native product IDs.
 - Represent unknown availability as `unknown`, not `in_stock`.
 - Preserve original product and image URLs as source fields; the URL itself does not grant image reuse rights.

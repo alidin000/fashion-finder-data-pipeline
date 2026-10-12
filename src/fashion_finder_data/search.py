@@ -86,6 +86,7 @@ def search_catalogue(
             "source_product_id": row["source_product_id"],
             "title": row["title"],
             "category": row["category"],
+            "source_category": row["source_category"],
             "price_amount": str(price) if price is not None else None,
             "currency": row["currency"],
             "source_url": row["source_url"],

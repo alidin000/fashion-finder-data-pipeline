@@ -41,12 +41,13 @@
 ## Phase 6 — Quality and refresh
 - [x] Add bounded retries and timeouts for web collection.
 - [x] Store fetch timestamps, source URL and adapter version.
-- [ ] Detect stale, removed or malformed listings.
-- [ ] Export quality metrics per retailer/category.
-- [ ] Keep a manual verification sample.
+- [x] Report stale observations and malformed stored values without changing stock state.
+- [ ] Establish a source-specific removal policy before marking listings unavailable.
+- [x] Export quality metrics per retailer/category.
+- [x] Keep the ten-offer Reserved verification sample in the source-status document.
 
 ## Phase 7 — Search-ready catalogue
-- [ ] Define a category taxonomy shared by all sources.
+- [x] Define shared keys for current categories and preserve unmapped source labels.
 - [x] Add text query, budget filter and price ascending/descending over normalized data.
 - [ ] Evaluate image embeddings only when catalogue coverage is adequate.
 

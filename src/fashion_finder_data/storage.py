@@ -26,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 
 from .schema import RetailerOffer
+from .taxonomy import normalize_category
 
 metadata = MetaData()
 
@@ -51,6 +52,7 @@ offers = Table(
     Column("title", Text, nullable=False),
     Column("brand", String),
     Column("category", String),
+    Column("source_category", String),
     Column("description", Text),
     Column("price_amount", String),
     Column("currency", String),
@@ -111,6 +113,19 @@ def open_database(path: Path) -> Engine:
 
     metadata.create_all(engine)
     with engine.begin() as connection:
+        offer_columns = {
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(retailer_offer)")
+        }
+        if "source_category" not in offer_columns:
+            connection.exec_driver_sql("ALTER TABLE retailer_offer ADD COLUMN source_category TEXT")
+            legacy_categories = connection.exec_driver_sql(
+                "SELECT id, category FROM retailer_offer WHERE category IS NOT NULL"
+            ).all()
+            for offer_id, original in legacy_categories:
+                connection.exec_driver_sql(
+                    "UPDATE retailer_offer SET source_category = ?, category = ? WHERE id = ?",
+                    (original, normalize_category(original), offer_id),
+                )
         columns = {
             row[1] for row in connection.exec_driver_sql("PRAGMA table_info(collection_run)")
         }
@@ -189,6 +204,7 @@ def upsert_offer(engine: Engine, offer: RetailerOffer) -> bool:
             "title": offer.title,
             "brand": offer.brand,
             "category": offer.category,
+            "source_category": offer.source_category,
             "description": offer.description,
             "price_amount": _money_text(offer.price_amount),
             "currency": offer.currency,
@@ -206,6 +222,9 @@ def upsert_offer(engine: Engine, offer: RetailerOffer) -> bool:
             values["price_amount"] = existing["price_amount"]
             values["currency"] = existing["currency"]
             values["original_price_amount"] = existing["original_price_amount"]
+        if existing and offer.source_category is None:
+            values["category"] = existing["category"]
+            values["source_category"] = existing["source_category"]
         if existing:
 
             def differs(key: str, value: Any) -> bool:
@@ -295,6 +314,7 @@ def export_catalogue(engine: Engine, output: Path, source_key: str | None = None
         "title",
         "brand",
         "category",
+        "source_category",
         "description",
         "price_amount",
         "currency",

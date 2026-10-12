@@ -11,6 +11,7 @@ from . import __version__
 from .collectors import SOURCES, crawl
 from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
+from .quality import quality_report
 from .schema import utc_now
 from .search import search_catalogue
 from .storage import export_catalogue, load_run, open_database
@@ -52,6 +53,9 @@ def make_parser() -> argparse.ArgumentParser:
         "--sort", choices=["price-asc", "price-desc", "recent"], default="price-asc"
     )
     search.add_argument("--limit", type=int, default=20, help="Maximum results (1–100)")
+    quality = commands.add_parser("quality", help="Report local offer freshness and completeness")
+    quality.add_argument("--stale-after-days", type=int, default=7)
+    quality.add_argument("--output", type=Path, help="Create a JSON report file")
     return parser
 
 
@@ -130,6 +134,18 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         for item in results:
             print(json.dumps(item, ensure_ascii=False))
+        return 0
+    if args.command == "quality":
+        try:
+            result = quality_report(engine, stale_after_days=args.stale_after_days)
+            body = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                with args.output.open("x", encoding="utf-8") as stream:
+                    stream.write(body)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(body, end="")
         return 0
     return 2
 

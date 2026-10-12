@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .taxonomy import normalize_category
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -83,6 +85,7 @@ class RetailerOffer(BaseModel):
     title: str = Field(min_length=1)
     brand: str | None = None
     category: str | None = None
+    source_category: str | None = None
     description: str | None = None
     price_amount: Decimal | None = None
     currency: str | None = None
@@ -163,7 +166,8 @@ def normalize(raw: RawProductRecord) -> RetailerOffer:
         canonical_url=canonical,
         title=str(data.get("name") or "").strip(),
         brand=str(data["brand"]).strip() if data.get("brand") else None,
-        category=str(data["category"]).strip() if data.get("category") else None,
+        category=normalize_category(str(data["category"])) if data.get("category") else None,
+        source_category=str(data["category"]).strip() if data.get("category") else None,
         description=str(data["description"]).strip() if data.get("description") else None,
         price_amount=price,
         currency=currency,
