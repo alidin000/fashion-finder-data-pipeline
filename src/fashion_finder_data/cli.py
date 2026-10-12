@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -12,9 +13,11 @@ from .collectors import SOURCES, crawl
 from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
+from .readiness import readiness_report, write_audit_sample
 from .removal import recheck_report
 from .schema import utc_now
 from .search import search_catalogue
+from .source_policy import load_policies
 from .storage import export_catalogue, load_run, open_database
 
 
@@ -71,6 +74,25 @@ def make_parser() -> argparse.ArgumentParser:
     recheck.add_argument("--source", choices=SOURCES)
     recheck.add_argument("--stale-after-days", type=int, default=7)
     recheck.add_argument("--limit", type=int, default=100)
+    policy_default = os.environ.get("FASHION_FINDER_SOURCE_POLICIES")
+    readiness = commands.add_parser(
+        "readiness", help="Measure one launch category against release gates"
+    )
+    readiness.add_argument("--category", required=True)
+    readiness.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    audit = commands.add_parser("audit-sample", help="Create a reproducible manual-review CSV")
+    audit.add_argument("--category", required=True)
+    audit.add_argument("--source", choices=SOURCES, required=True)
+    audit.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    audit.add_argument("--count", type=int, default=30)
+    audit.add_argument(
+        "--all-stored", action="store_true", help="Include nonpublishable offers for internal QA"
+    )
+    audit.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -184,6 +206,26 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if args.command in {"readiness", "audit-sample"}:
+        try:
+            policies = load_policies(args.policy)
+            if args.command == "readiness":
+                result = readiness_report(engine, policies, args.category)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            else:
+                count = write_audit_sample(
+                    engine,
+                    policies,
+                    args.category,
+                    args.source,
+                    args.output,
+                    count=args.count,
+                    all_stored=args.all_stored,
+                )
+                print(f"Wrote {count} audit offers to {args.output}")
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
         return 0
     return 2
 

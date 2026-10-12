@@ -74,6 +74,44 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 
 Open `http://localhost:3000`. The search form calls the API without crawling retailers. A phrase such as `black jacket under 15000 Ft` fills the HUF budget and filters higher-priced offers. Images are displayed only if the active source policy permits display. Photo upload shows a local preview; image matching returns HTTP 503 until approved image sources, a versioned index, and the 30-task evaluation exist. The server validates uploaded type, bytes, and dimensions and does not retain the upload. Put a request-size cap at the reverse proxy before Internet deployment.
 
+## Measure launch-category coverage
+
+Run the local release-readiness report after choosing a launch category. It counts
+stored offers and offers currently eligible for the public API under the supplied
+policy and each source's freshness window. The four supported source keys appear
+even when they have no offers. The text threshold is two approved sources with
+at least 100 eligible offers each. The photo threshold additionally requires
+declared display and processing permission and 100 HTTPS image candidates per
+source. An image candidate count does not prove image quality or actual rights.
+
+```bash
+.venv/bin/fashion-finder readiness --category jackets --policy data/source-policies.json
+```
+
+Omit `--policy` to use `FASHION_FINDER_SOURCE_POLICIES`. If neither is set,
+the report treats every source as unapproved. The report does not inspect
+agreements or make a beta-ready decision. Confirm rights against the private
+evidence, audit offers, evaluate real shopping tasks, and run a deployed smoke
+test before calling the release gate met.
+
+Create one review CSV per launch source. By default, rows must currently be
+eligible for the public API. This keeps the 30-offer audit focused on offers
+the shopper could see. The sample is reproducible on the same catalogue and
+cannot overwrite an existing review file.
+
+```bash
+.venv/bin/fashion-finder audit-sample --category jackets --source reserved \
+  --policy data/source-policies.json --count 30 \
+  --output data/audits/reserved-jackets.csv
+```
+
+Before approval, use `--all-stored` for an **internal diagnostic sample**.
+Its `public_eligible` column marks rows that cannot count toward the release
+audit. Open each product page and fill in the four verification columns and
+notes. A CSV with fewer than 30 eligible rows cannot satisfy the 30-offer
+audit gate. Keep the completed review and approval evidence private; `data/audits/`
+is ignored by Git.
+
 ## Checks
 
 ```bash

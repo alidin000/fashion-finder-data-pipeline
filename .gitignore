@@ -15,6 +15,7 @@ build/
 data/raw/**
 data/exports/**
 data/reports/**
+data/audits/**
 data/*.sqlite
 data/*.db
 data/source-policies*.json
