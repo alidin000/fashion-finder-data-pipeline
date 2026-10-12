@@ -1,22 +1,156 @@
-# Fashion Finder — Data Pipeline
+# Fashion Finder
 
-A local-first proof of concept for collecting, normalizing, and comparing fashion-product listings from multiple sources.
+Fashion Finder is a local-first clothing discovery app for Hungarian shops. It
+combines a product collection pipeline, a Django catalogue API, and a responsive
+Next.js shopper interface. The first usable flow is **text and filter search**
+over offers that a source policy permits the app to publish.
 
-## Goal
+The repository is a working **local prototype**, not a public shopping service.
+The default source policy publishes no offers. Photo upload has a real preview,
+but visual matching remains unavailable until product-image rights, an image
+index, and real-user evaluation are in place.
 
-Build a **local product-ingestion pipeline** for Fashion Finder. It should collect small test batches, preserve raw records, normalize them to a common product-offer schema, track price observations, and export a catalogue for the search frontend.
+## What it looks like
 
-The first pipeline is implemented. Reserved Hungary passed live runs of ten coats and three dresses on 2026-10-12. Zara and Pull&Bear returned pages without usable product data, and the H&M Scrapy run received HTTP 403. These sources are configured and reported separately, but are **not verified working collectors**. They need an allowed feed or documented access method; do not use access-control bypasses.
+The page has a fashion-style landing section, a search form beside a photo
+preview panel, and a grid of product cards. On a phone, those sections stack
+vertically. Each card shows the shop, HUF price, last-checked date, stock claim,
+match label, and a link to the retailer. An image placeholder appears when no
+permitted product image is available.
 
-## Initial source strategy
+![Fashion Finder desktop view with one synthetic offer](docs/images/shopper-desktop.png)
 
-- **General-purpose tooling:** Scrapy, Playwright for Python, and Crawlee for Python.
-- **Retailer adapters:** Zara, H&M, Reserved, and Pull&Bear. The current collectors use public category/product pages and structured product metadata. No retailer-specific community code is copied.
-- **Optional experiment:** Google Shopping results through a community scraper. Treat results as search candidates, not a complete canonical retailer catalogue.
+[View the 390 px mobile screenshot](docs/images/shopper-mobile.png). Both
+screenshots show **one synthetic local offer**. They do not show live retailer
+coverage or grant permission to use retailer images.
 
-See [source and licence review](docs/source-review.md) for the repositories and point-in-time findings.
+## What a shopper can do
 
-## Pipeline
+1. Search by text, category, colour, size, shop, and maximum HUF price. For
+   example, `black jacket under 15000 Ft` fills the price limit automatically.
+2. Sort current eligible offers by price or last check, then load more results.
+3. Review each offer's price, freshness, source, image availability, and stock
+   state. Unknown stock is shown as unconfirmed. Similarity never implies an
+   identical item: unverified results are labeled **Style inspiration**.
+4. Open the offer on the Hungarian retailer website to confirm final details.
+5. Select a JPEG, PNG, or WebP photo and see a local preview. The app explains
+   that visual matching is unavailable instead of showing invented matches.
+
+No account, checkout, delivery estimate, stock guarantee, or price alert is
+implemented. Search results come from stored catalogue data; a shopper request
+never starts a retailer crawl.
+
+## How it works
+
+```mermaid
+flowchart LR
+  A[Source feed or bounded collector] --> B[Raw JSONL archive]
+  B --> C[Normalize and validate]
+  C --> D[(SQLite offers, prices, runs)]
+  D --> E[Django /api/v1]
+  P[Source policy and freshness rules] --> E
+  E --> F[Next.js shopper page]
+  W[Hourly feed worker] --> A
+```
+
+- **Collection:** Scrapy can run small, robots-aware retailer checks. An
+  authorized CSV feed can instead enter through `import-feed`. The scheduled
+  worker watches timestamped CSV files for the four configured sources and
+  imports changed files outside shopper requests.
+- **Storage:** The pipeline preserves raw JSONL, normalizes records, deduplicates
+  by source product ID or URL, and records price changes and run errors in
+  SQLite. Django migrations upgrade an existing local catalogue.
+- **Publication:** A default-deny source policy controls public listing and
+  image use separately. The API hides prohibited, stale, out-of-stock,
+  non-HUF, or invalid-Hungarian-link offers. Missing stock data stays unknown.
+- **Search:** Django returns bounded, cursor-paged JSON. The web app sends
+  search/filter requests through its same-origin API proxy and renders only API
+  results. The API never exposes raw records or private policy evidence.
+- **Operations:** Docker Compose runs migrations, Django/Gunicorn, Next.js, and
+  the feed worker as separate processes. Optional anonymous analytics stores
+  daily counters and removes rows older than 30 days.
+
+### API routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v1/health` | Service status, latest catalogue timestamp, photo capability, analytics setting. |
+| `GET /api/v1/search` | Eligible offers with text, filters, sort, limit, and cursor. |
+| `GET /api/v1/offers/{id}` | One current, permitted offer or 404. |
+| `POST /api/v1/search/image` | Validates an uploaded image; currently returns 503 for matching. |
+| `POST /api/v1/events` | Records coarse daily metrics only when analytics is enabled. |
+
+### Where the code lives
+
+| Path | Responsibility |
+| --- | --- |
+| `web/app/` | Shopper page, responsive styling, and local photo preview. |
+| `src/fashion_finder_data/collectors.py`, `feed.py`, `refresh.py` | Bounded collection, CSV import, and scheduled feed refresh. |
+| `src/fashion_finder_data/schema.py`, `pipeline.py`, `storage.py` | Validation, normalization, raw archive, and SQLite writes. |
+| `src/fashion_finder_data/public_catalogue.py`, `api/` | Policy-aware search and Django HTTP routes. |
+| `src/fashion_finder_data/catalogue/` | Django models, migrations, and read-only staff admin. |
+| `tests/`, `web/lib/*.test.ts`, `.github/workflows/ci.yml` | Regression checks and CI. |
+
+### Run the app locally with Docker
+
+From the repository root in Bash or WSL, with Docker Compose installed:
+
+```bash
+cp .env.example .env
+python3 -c 'import secrets; print("FASHION_FINDER_SECRET_KEY=" + secrets.token_urlsafe(48))' >> .env
+mkdir -p data/feeds
+cp config/source-policies.example.json data/source-policies.json
+docker compose up --build -d
+docker compose ps
+curl -fsS http://127.0.0.1:8000/api/v1/health
+```
+
+Open **http://localhost:3000**. The API listens on
+**http://127.0.0.1:8000**. Both ports bind to loopback. On Linux or WSL, set
+`FASHION_FINDER_UID` and `FASHION_FINDER_GID` in `.env` to `id -u` and `id -g`
+if they differ from 1000. Keep `.env` and the source policy private.
+
+The example policy is deliberately **pending**, so a fresh install shows an
+empty catalogue. Do not mark a shop approved merely to fill the UI. Follow the
+[local Docker runbook](docs/local-docker-runbook.md) to import a permitted feed,
+inspect worker logs, back up SQLite, and check the app. The
+[local Python/Node setup](docs/app-local-setup.md) covers development without
+Docker.
+
+## Data coverage and release state
+
+Reserved Hungary produced 13 bounded live sample offers on 12 October 2026,
+including 10 checked against product pages. That is extraction evidence, not
+an approved production catalogue. Zara and Pull&Bear did not yield usable live
+product data in the documented checks; H&M returned HTTP 403. ABOUT YOU and
+Answear Hungary advertise affiliate feeds, but they are [candidates](docs/hungarian-source-candidates.md):
+publisher access, feed samples, and image-use terms are still needed.
+
+A private beta needs two approved sources with at least 100 current offers in
+one category, 30 manually checked offers per source, 30 consented shopping
+tasks with at least 24 successful, permitted image relevance evidence, and a
+live source-to-browser test. The [application progress](docs/application-progress.md)
+tracks the implemented work and open gates. The [task evaluation guide](docs/task-evaluation-guide.md)
+describes how to record the real-user result without saving queries or photos
+in the report.
+
+## Collection tools and source status
+
+- **Scrapy:** bounded public-page collection with robots checks and conservative
+  request pacing. The configured adapters are Zara, H&M, Reserved, and
+  Pull&Bear. Only the small Reserved sample is documented as successful.
+- **Playwright:** optional Chromium rendering and diagnostics for pages that
+  need JavaScript. It does not guarantee access to a blocked storefront.
+- **Crawlee:** compared with Scrapy on a local fixture; it is not required at
+  runtime.
+- **Feeds:** local authorized CSV imports are supported for the four configured
+  sources. ABOUT YOU and Answear feeds are candidates, not wired importers yet.
+
+See the [source and licence review](docs/source-review.md),
+[live source checks](docs/live-source-status.md), and
+[remaining source decisions](docs/remaining-roadmap-decisions.md).
+
+## Ingestion pipeline in detail
 
 1. Collect a small batch from one source.
 2. Save raw source output to `data/raw/` as JSONL.
@@ -26,25 +160,24 @@ See [source and licence review](docs/source-review.md) for the repositories and 
 6. Upsert offers into local SQLite and append price observations.
 7. Export normalized results and a collection-run report.
 
-See [architecture](docs/architecture.md), [data schema](docs/data-schema.md), and [roadmap](docs/roadmap.md).
-See [live Hungarian source status](docs/live-source-status.md) for the latest bounded check.
-The [application implementation plan](docs/application-implementation-plan.md) and [local app setup](docs/app-local-setup.md) cover the read-only API and shopper web app. Public results require an explicit approved source policy; without one, the API returns an empty catalogue.
-See [application progress](docs/application-progress.md) for implemented pieces and beta blockers.
-The [local Docker runbook](docs/local-docker-runbook.md) covers the web, API,
-timestamped-feed worker, backups, and monitoring. The [task evaluation guide](docs/task-evaluation-guide.md)
-defines the consented 30-task report.
+See the [architecture](docs/architecture.md), [data schema](docs/data-schema.md),
+[pipeline roadmap](docs/roadmap.md), and [application implementation plan](docs/application-implementation-plan.md)
+for the full contracts and delivery sequence.
 
-## Initial stack
+## Development stack and checks
 
 - Python 3.12
 - Scrapy (robots-aware HTTP collection)
 - Playwright for Python (optional Chromium rendering in the collector and diagnostics)
 - Pydantic for schema validation
-- Django ORM and migrations with SQLite for local persistence and catalogue review
+- Django ORM and migrations with SQLite for local persistence, API, and catalogue review
+- Next.js and TypeScript for the shopper page
+- Docker Compose, Gunicorn, and WhiteNoise for local deployment
 - JSONL for raw snapshots and portable exports
-- Pytest for tests
+- Pytest, Ruff, ESLint, and TypeScript checks
 
-GitHub Actions runs pytest, Ruff, and the web checks on pushes and pull requests. Local Python checks:
+GitHub Actions runs the Python and web checks and builds both Docker images on
+pushes and pull requests. Local Python checks:
 
 ```powershell
 python -m pytest
@@ -52,12 +185,8 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-Crawlee was compared on a local fixture and is not a required runtime component.
-The [benchmark and remaining-source decisions](docs/remaining-roadmap-decisions.md) explain why Scrapy remains the default.
-
-The shopper API now runs on Django. Existing SQLite catalogues are adopted by
-`fashion-finder migrate`; see [local app setup](docs/app-local-setup.md) before
-starting the Django server.
+Existing SQLite catalogues are adopted by `fashion-finder migrate`; see the
+[local app setup](docs/app-local-setup.md) before starting a development server.
 
 ## Windows quick start
 
