@@ -7,14 +7,11 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
-from sqlalchemy.engine import Engine
-
-from .storage import offers, retailers
+from .storage import Database, offer_rows
 
 
 def search_catalogue(
-    engine: Engine,
+    engine: Database,
     *,
     query: str | None = None,
     source: str | None = None,
@@ -34,17 +31,11 @@ def search_catalogue(
         raise ValueError("limit must be between 1 and 100")
     if sort not in {"price-asc", "price-desc", "recent"}:
         raise ValueError("unsupported sort order")
-    statement = (
-        select(offers, retailers.c.source_key)
-        .join(retailers, offers.c.retailer_id == retailers.c.id)
-        .where(offers.c.status == "active", offers.c.currency == currency)
-    )
+    rows = offer_rows(engine, status="active", currency=currency)
     if source:
-        statement = statement.where(retailers.c.source_key == source)
+        rows = [row for row in rows if row["source_key"] == source]
     if category:
-        statement = statement.where(offers.c.category == category)
-    with engine.connect() as connection:
-        rows = [dict(row) for row in connection.execute(statement).mappings()]
+        rows = [row for row in rows if row["category"] == category]
     words = (query or "").casefold().split()
     results = []
     for row in rows:

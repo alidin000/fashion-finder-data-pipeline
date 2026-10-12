@@ -1,140 +1,86 @@
-"""Local SQLite storage and portable catalogue exports."""
+"""Django-backed local catalogue storage and portable exports."""
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
+import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    ForeignKey,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    Text,
-    UniqueConstraint,
-    create_engine,
-    event,
-    select,
-)
-from sqlalchemy.engine import Engine
+import django
+from django.apps import apps
+from django.conf import settings
+from django.core.management import call_command
+from django.db import connections, transaction
 
-from .schema import RetailerOffer
+from .schema import RetailerOffer as ParsedOffer
 from .taxonomy import normalize_category
 
-metadata = MetaData()
 
-retailers = Table(
-    "retailer",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("source_key", String, nullable=False),
-    Column("market_code", String, nullable=False),
-    Column("name", String, nullable=False),
-    Column("enabled", Boolean, nullable=False, default=True),
-    UniqueConstraint("source_key", "market_code"),
-)
-
-offers = Table(
-    "retailer_offer",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("retailer_id", ForeignKey("retailer.id"), nullable=False),
-    Column("source_product_id", String),
-    Column("source_url", Text, nullable=False),
-    Column("canonical_url", Text, nullable=False),
-    Column("title", Text, nullable=False),
-    Column("brand", String),
-    Column("category", String),
-    Column("source_category", String),
-    Column("description", Text),
-    Column("price_amount", String),
-    Column("currency", String),
-    Column("original_price_amount", String),
-    Column("image_urls", Text, nullable=False),
-    Column("colour_names", Text, nullable=False),
-    Column("size_options", Text, nullable=False),
-    Column("availability_status", String, nullable=False),
-    Column("source_fetched_at", String, nullable=False),
-    Column("created_at", String, nullable=False),
-    Column("updated_at", String, nullable=False),
-    Column("last_seen_at", String, nullable=False),
-    Column("status", String, nullable=False, default="active"),
-    UniqueConstraint("retailer_id", "source_product_id"),
-    UniqueConstraint("retailer_id", "canonical_url"),
-)
-
-observations = Table(
-    "price_observation",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("offer_id", ForeignKey("retailer_offer.id"), nullable=False),
-    Column("price_amount", String, nullable=False),
-    Column("currency", String, nullable=False),
-    Column("observed_at", String, nullable=False),
-    Column("source_fetched_at", String, nullable=False),
-)
-
-runs = Table(
-    "collection_run",
-    metadata,
-    Column("run_id", String, primary_key=True),
-    Column("source_key", String, nullable=False),
-    Column("market_code", String, nullable=False),
-    Column("started_at", String, nullable=False),
-    Column("finished_at", String, nullable=False),
-    Column("status", String, nullable=False),
-    Column("records_discovered", Integer, nullable=False),
-    Column("records_parsed", Integer, nullable=False),
-    Column("records_seen", Integer, nullable=False),
-    Column("records_valid", Integer, nullable=False),
-    Column("records_rejected", Integer, nullable=False),
-    Column("records_upserted", Integer, nullable=False),
-    Column("records_deduplicated", Integer, nullable=False),
-    Column("error_summary", Text, nullable=False),
-    Column("completeness", Text, nullable=False),
-    Column("adapter_version", String, nullable=False),
-)
+@dataclass(frozen=True)
+class Database:
+    alias: str
+    path: Path
 
 
-def open_database(path: Path) -> Engine:
+def _models():
+    return (
+        apps.get_model("catalogue", "Retailer"),
+        apps.get_model("catalogue", "RetailerOffer"),
+        apps.get_model("catalogue", "PriceObservation"),
+        apps.get_model("catalogue", "CollectionRun"),
+    )
+
+
+def _upgrade_legacy_columns(path: Path) -> None:
+    """Apply the two pre-Django additive upgrades before fake-initial migration."""
+    if not path.exists():
+        return
+    with sqlite3.connect(path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "retailer_offer" in tables:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(retailer_offer)")}
+            if "source_category" not in columns:
+                connection.execute("ALTER TABLE retailer_offer ADD COLUMN source_category TEXT")
+                for offer_id, category in connection.execute(
+                    "SELECT id, category FROM retailer_offer WHERE category IS NOT NULL"
+                ).fetchall():
+                    connection.execute(
+                        "UPDATE retailer_offer SET source_category=?, category=? WHERE id=?",
+                        (category, normalize_category(category), offer_id),
+                    )
+        if "collection_run" in tables:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(collection_run)")}
+            for column in ("records_discovered", "records_parsed"):
+                if column not in columns:
+                    connection.execute(
+                        f"ALTER TABLE collection_run ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                    )
+
+
+def open_database(path: Path) -> Database:
+    """Register a SQLite catalogue and apply Django migrations, including legacy adoption."""
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fashion_finder_data.django_project.settings")
+    if not apps.ready:
+        django.setup()
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(f"sqlite:///{path}")
-
-    @event.listens_for(engine, "connect")
-    def enable_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
-
-    metadata.create_all(engine)
-    with engine.begin() as connection:
-        offer_columns = {
-            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(retailer_offer)")
-        }
-        if "source_category" not in offer_columns:
-            connection.exec_driver_sql("ALTER TABLE retailer_offer ADD COLUMN source_category TEXT")
-            legacy_categories = connection.exec_driver_sql(
-                "SELECT id, category FROM retailer_offer WHERE category IS NOT NULL"
-            ).all()
-            for offer_id, original in legacy_categories:
-                connection.exec_driver_sql(
-                    "UPDATE retailer_offer SET source_category = ?, category = ? WHERE id = ?",
-                    (original, normalize_category(original), offer_id),
-                )
-        columns = {
-            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(collection_run)")
-        }
-        for name in ("records_discovered", "records_parsed"):
-            if name not in columns:
-                connection.exec_driver_sql(
-                    f"ALTER TABLE collection_run ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0"
-                )
-    return engine
+    alias = "catalogue_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
+    if alias not in connections.databases:
+        connections.databases[alias] = {**settings.DATABASES["default"], "NAME": str(path)}
+    connections[alias].close()
+    _upgrade_legacy_columns(path)
+    call_command("migrate", database=alias, fake_initial=True, interactive=False, verbosity=0)
+    return Database(alias, path)
 
 
 def _iso(value: datetime) -> str:
@@ -145,60 +91,54 @@ def _money_text(value: Decimal | None) -> str | None:
     return format(value.normalize(), "f") if value is not None else None
 
 
-def upsert_offer(engine: Engine, offer: RetailerOffer) -> bool:
+def offer_rows(database: Database, **filters: Any) -> list[dict[str, Any]]:
+    """Return joined rows in the legacy export shape."""
+    _, Offer, _, _ = _models()
+    query = Offer.objects.using(database.alias).select_related("retailer").filter(**filters)
+    rows = []
+    for offer in query:
+        row = {
+            field.name: getattr(offer, field.name)
+            for field in Offer._meta.fields
+            if field.name != "retailer"
+        }
+        row["retailer_id"] = offer.retailer_id
+        row["source_key"] = offer.retailer.source_key
+        row["market_code"] = offer.retailer.market_code
+        rows.append(row)
+    return rows
+
+
+def upsert_offer(database: Database, offer: ParsedOffer) -> bool:
     """Persist one offer; return True for a new offer or changed fields."""
+    Retailer, Offer, Observation, _ = _models()
     now = _iso(offer.source_fetched_at)
-    with engine.begin() as connection:
-        retailer = connection.execute(
-            select(retailers.c.id).where(
-                retailers.c.source_key == offer.source_key,
-                retailers.c.market_code == offer.market_code,
-            )
-        ).scalar_one_or_none()
-        if retailer is None:
-            retailer = connection.execute(
-                retailers.insert().values(
-                    source_key=offer.source_key,
-                    market_code=offer.market_code,
-                    name=offer.source_key.title(),
-                    enabled=True,
-                )
-            ).inserted_primary_key[0]
+    with transaction.atomic(using=database.alias):
+        retailer, _ = Retailer.objects.using(database.alias).get_or_create(
+            source_key=offer.source_key,
+            market_code=offer.market_code,
+            defaults={"name": offer.source_key.title(), "enabled": True},
+        )
+        offers = Offer.objects.using(database.alias)
         id_match = (
-            connection.execute(
-                select(offers).where(
-                    offers.c.retailer_id == retailer,
-                    offers.c.source_product_id == offer.source_product_id,
-                )
-            )
-            .mappings()
-            .one_or_none()
+            offers.filter(retailer=retailer, source_product_id=offer.source_product_id).first()
             if offer.source_product_id
             else None
         )
-        url_match = (
-            connection.execute(
-                select(offers).where(
-                    offers.c.retailer_id == retailer,
-                    offers.c.canonical_url == offer.canonical_url,
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
-        if id_match and url_match and id_match["id"] != url_match["id"]:
+        url_match = offers.filter(retailer=retailer, canonical_url=offer.canonical_url).first()
+        if id_match and url_match and id_match.pk != url_match.pk:
             raise ValueError("source ID and canonical URL identify different existing offers")
         existing = id_match or url_match
         if (
             existing
-            and existing["source_product_id"]
+            and existing.source_product_id
             and offer.source_product_id
-            and existing["source_product_id"] != offer.source_product_id
+            and existing.source_product_id != offer.source_product_id
         ):
             raise ValueError("canonical URL already belongs to a different source product ID")
         values = {
             "source_product_id": offer.source_product_id
-            or (existing["source_product_id"] if existing else None),
+            or (existing.source_product_id if existing else None),
             "source_url": offer.source_url,
             "canonical_url": offer.canonical_url,
             "title": offer.title,
@@ -219,16 +159,15 @@ def upsert_offer(engine: Engine, offer: RetailerOffer) -> bool:
             "status": "active",
         }
         if existing and offer.price_amount is None:
-            values["price_amount"] = existing["price_amount"]
-            values["currency"] = existing["currency"]
-            values["original_price_amount"] = existing["original_price_amount"]
+            for key in ("price_amount", "currency", "original_price_amount"):
+                values[key] = getattr(existing, key)
         if existing and offer.source_category is None:
-            values["category"] = existing["category"]
-            values["source_category"] = existing["source_category"]
+            for key in ("category", "source_category"):
+                values[key] = getattr(existing, key)
         if existing:
 
             def differs(key: str, value: Any) -> bool:
-                old = existing[key]
+                old = getattr(existing, key)
                 if (
                     key in {"price_amount", "original_price_amount"}
                     and old is not None
@@ -238,73 +177,64 @@ def upsert_offer(engine: Engine, offer: RetailerOffer) -> bool:
                 return old != value
 
             changed = any(
-                differs(key, val)
-                for key, val in values.items()
+                differs(key, value)
+                for key, value in values.items()
                 if key not in {"updated_at", "last_seen_at", "source_fetched_at"}
             )
-            connection.execute(
-                offers.update().where(offers.c.id == existing["id"]).values(**values)
-            )
-            offer_id = existing["id"]
+            for key, value in values.items():
+                setattr(existing, key, value)
+            existing.save(using=database.alias)
+            offer_id = existing.pk
         else:
             changed = True
-            offer_id = connection.execute(
-                offers.insert().values(retailer_id=retailer, created_at=now, **values)
-            ).inserted_primary_key[0]
+            item = Offer.objects.using(database.alias).create(
+                retailer=retailer, created_at=now, **values
+            )
+            offer_id = item.pk
         if offer.price_amount is not None and offer.currency is not None:
-            previous = connection.execute(
-                select(observations.c.price_amount, observations.c.currency)
-                .where(observations.c.offer_id == offer_id)
-                .order_by(observations.c.id.desc())
-                .limit(1)
-            ).first()
-            pair = (_money_text(offer.price_amount), offer.currency)
+            previous = (
+                Observation.objects.using(database.alias)
+                .filter(offer_id=offer_id)
+                .order_by("-id")
+                .first()
+            )
+            price = _money_text(offer.price_amount)
             if (
                 previous is None
-                or Decimal(previous[0]) != offer.price_amount
-                or previous[1] != offer.currency
+                or Decimal(previous.price_amount) != offer.price_amount
+                or previous.currency != offer.currency
             ):
-                connection.execute(
-                    observations.insert().values(
-                        offer_id=offer_id,
-                        price_amount=pair[0],
-                        currency=pair[1],
-                        observed_at=now,
-                        source_fetched_at=now,
-                    )
+                Observation.objects.using(database.alias).create(
+                    offer_id=offer_id,
+                    price_amount=price,
+                    currency=offer.currency,
+                    observed_at=now,
+                    source_fetched_at=now,
                 )
         return changed
 
 
-def save_run(engine: Engine, report: dict[str, Any]) -> None:
+def save_run(database: Database, report: dict[str, Any]) -> None:
+    _, _, _, Run = _models()
     values = dict(report)
     values["error_summary"] = json.dumps(values["error_summary"], ensure_ascii=False)
     values["completeness"] = json.dumps(values["completeness"], ensure_ascii=False)
-    with engine.begin() as connection:
-        connection.execute(runs.insert().values(**values))
+    Run.objects.using(database.alias).create(**values)
 
 
-def load_run(engine: Engine, run_id: str) -> dict[str, Any] | None:
-    with engine.connect() as connection:
-        row = (
-            connection.execute(select(runs).where(runs.c.run_id == run_id)).mappings().one_or_none()
-        )
-    if row is None:
-        return None
-    data = dict(row)
-    data["error_summary"] = json.loads(data["error_summary"])
-    data["completeness"] = json.loads(data["completeness"])
-    return data
+def load_run(database: Database, run_id: str) -> dict[str, Any] | None:
+    _, _, _, Run = _models()
+    row = Run.objects.using(database.alias).filter(run_id=run_id).values().first()
+    if row is not None:
+        row["error_summary"] = json.loads(row["error_summary"])
+        row["completeness"] = json.loads(row["completeness"])
+    return row
 
 
-def export_catalogue(engine: Engine, output: Path, source_key: str | None = None) -> int:
-    query = select(offers, retailers.c.source_key, retailers.c.market_code).join(
-        retailers, offers.c.retailer_id == retailers.c.id
-    )
+def export_catalogue(database: Database, output: Path, source_key: str | None = None) -> int:
+    rows = offer_rows(database)
     if source_key:
-        query = query.where(retailers.c.source_key == source_key)
-    with engine.connect() as connection:
-        rows = [dict(row) for row in connection.execute(query).mappings()]
+        rows = [row for row in rows if row["source_key"] == source_key]
     output.parent.mkdir(parents=True, exist_ok=True)
     fields = [
         "source_key",

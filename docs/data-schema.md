@@ -20,14 +20,14 @@ One record per retailer listing/offer. Do not assume two visually similar record
 - category — shared key for recognized categories, otherwise null
 - source_category — original source label, including labels outside the current taxonomy
 - description — nullable
-- price_amount — Decimal, nullable
+- price_amount — exact decimal text in SQLite, parsed as Decimal in Python; nullable
 - currency — ISO currency code, nullable if not confidently known
 - original_price_amount — nullable
 - image_urls — JSON array, subject to source usage/storage decisions
 - colour_names — JSON array
 - size_options — JSON array
 - availability_status — in_stock, out_of_stock, unknown
-- market_code
+- market_code — inherited from the linked retailer
 - source_fetched_at
 - created_at, updated_at, last_seen_at
 - status — active, needs_recheck, unavailable
@@ -48,8 +48,8 @@ Insert a new observation when price or currency changes. Periodic observations c
 - market_code
 - started_at, finished_at
 - status
-- records_seen, records_valid, records_rejected, records_upserted
-- error_count, error_summary
+- records_discovered, records_parsed, records_seen, records_valid, records_rejected, records_upserted, records_deduplicated
+- error_summary and completeness as JSON text
 - adapter_version
 
 ## Data rules

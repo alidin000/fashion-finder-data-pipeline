@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 from scrapy.http import HtmlResponse, Request
-from sqlalchemy import func, select
 
+from fashion_finder_data.catalogue.models import PriceObservation, RetailerOffer
 from fashion_finder_data.cli import make_parser
 from fashion_finder_data.collectors import (
     SOURCES,
@@ -25,7 +25,7 @@ from fashion_finder_data.collectors import (
 from fashion_finder_data.feed import import_feed
 from fashion_finder_data.pipeline import ingest_jsonl, ingest_records
 from fashion_finder_data.schema import RawProductRecord, normalize, parse_money
-from fashion_finder_data.storage import export_catalogue, observations, offers, open_database
+from fashion_finder_data.storage import export_catalogue, open_database
 
 URL = "https://www.reserved.com/hu/hu/test-coat-123ab-45c"
 
@@ -221,8 +221,7 @@ def test_tracking_query_is_preserved_but_deduplicated(tmp_path: Path) -> None:
     assert offer.canonical_url == URL
     ingest_records(engine, tmp_path, "reserved", [tracked])
     report = ingest_records(engine, tmp_path, "reserved", [raw(sku=None)])
-    with engine.connect() as connection:
-        count = connection.scalar(select(func.count()).select_from(offers))
+    count = RetailerOffer.objects.using(engine.alias).count()
     assert report["records_valid"] == 1
     assert count == 1
 
@@ -232,13 +231,12 @@ def test_repeat_run_updates_offer_and_only_records_price_changes(tmp_path: Path)
     first = ingest_records(engine, tmp_path, "reserved", [raw()])
     second = ingest_records(engine, tmp_path, "reserved", [raw("42995")])
     third = ingest_records(engine, tmp_path, "reserved", [raw("39995.00")])
-    with engine.connect() as connection:
-        offer_count = connection.scalar(select(func.count()).select_from(offers))
-        prices = (
-            connection.execute(select(observations.c.price_amount).order_by(observations.c.id))
-            .scalars()
-            .all()
-        )
+    offer_count = RetailerOffer.objects.using(engine.alias).count()
+    prices = list(
+        PriceObservation.objects.using(engine.alias)
+        .order_by("id")
+        .values_list("price_amount", flat=True)
+    )
     assert first["records_upserted"] == 1
     assert second["records_deduplicated"] == 1
     assert third["records_upserted"] == 1
@@ -251,9 +249,8 @@ def test_missing_price_does_not_erase_last_known_price(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "catalog.sqlite")
     ingest_records(engine, tmp_path, "reserved", [raw()])
     ingest_records(engine, tmp_path, "reserved", [raw(None)])
-    with engine.connect() as connection:
-        price = connection.scalar(select(offers.c.price_amount))
-        count = connection.scalar(select(func.count()).select_from(observations))
+    price = RetailerOffer.objects.using(engine.alias).values_list("price_amount", flat=True).get()
+    count = PriceObservation.objects.using(engine.alias).count()
     assert price == "42995"
     assert count == 1
 
@@ -261,12 +258,10 @@ def test_missing_price_does_not_erase_last_known_price(tmp_path: Path) -> None:
 def test_equivalent_legacy_price_format_does_not_create_observation(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "catalog.sqlite")
     ingest_records(engine, tmp_path, "reserved", [raw()])
-    with engine.begin() as connection:
-        connection.execute(offers.update().values(price_amount="42995.00"))
-        connection.execute(observations.update().values(price_amount="42995.00"))
+    RetailerOffer.objects.using(engine.alias).update(price_amount="42995.00")
+    PriceObservation.objects.using(engine.alias).update(price_amount="42995.00")
     report = ingest_records(engine, tmp_path, "reserved", [raw("42995")])
-    with engine.connect() as connection:
-        count = connection.scalar(select(func.count()).select_from(observations))
+    count = PriceObservation.objects.using(engine.alias).count()
     assert report["records_deduplicated"] == 1
     assert count == 1
 
@@ -284,8 +279,7 @@ def test_conflicting_source_identity_is_rejected(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "catalog.sqlite")
     ingest_records(engine, tmp_path, "reserved", [raw()])
     report = ingest_records(engine, tmp_path, "reserved", [raw(sku="different-sku")])
-    with engine.connect() as connection:
-        count = connection.scalar(select(func.count()).select_from(offers))
+    count = RetailerOffer.objects.using(engine.alias).count()
     assert report["records_rejected"] == 1
     assert report["status"] == "failed"
     assert count == 1
@@ -312,8 +306,7 @@ def test_authorized_feed_import_rejects_bad_market_and_preserves_good_rows(tmp_p
         encoding="utf-8",
     )
     report = import_feed(engine, tmp_path, feed, "reserved")
-    with engine.connect() as connection:
-        count = connection.scalar(select(func.count()).select_from(offers))
+    count = RetailerOffer.objects.using(engine.alias).count()
     assert report["status"] == "partial"
     assert report["records_discovered"] == 3
     assert report["records_valid"] == 1

@@ -5,16 +5,15 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from sqlalchemy.engine import Engine
-
 from .collectors import SOURCES, allowed_url
 from .pipeline import ingest_records
 from .schema import RawProductRecord, utc_now
+from .storage import Database
 
 REQUIRED_COLUMNS = {"product_url", "name", "price", "currency"}
 
 
-def import_feed(engine: Engine, root: Path, path: Path, source_key: str) -> dict:
+def import_feed(engine: Database, root: Path, path: Path, source_key: str) -> dict:
     """Import a local, authorized CSV; reject bad rows without losing good ones."""
     source = SOURCES[source_key]
     records: list[RawProductRecord] = []

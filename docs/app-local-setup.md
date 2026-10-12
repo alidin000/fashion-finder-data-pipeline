@@ -16,7 +16,33 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
+For an existing catalogue, stop collector/API processes and back up the SQLite
+file before migration. From the repository root:
+
+```bash
+cp data/fashion_finder.sqlite data/fashion_finder.sqlite.before-django
+.venv/bin/fashion-finder migrate
+```
+
+The migration keeps the existing four catalogue tables and rows. It adds
+Django's migration and admin tables. For a new installation, omit the copy and
+run `fashion-finder migrate` to create the database. To roll back a local
+migration, stop the processes and restore the backed-up SQLite file. Take a
+fresh backup if new collection runs happened after migration; restoring the old
+file discards those newer runs.
+
 For PowerShell on Windows, use `py -3.12 -m venv .venv`, then `.venv\Scripts\python -m pip install -e ".[dev]"`. The [pipeline setup guide](local-setup-windows.md) has collection commands.
+
+On Windows, the migration commands are:
+
+```powershell
+Copy-Item data\fashion_finder.sqlite data\fashion_finder.sqlite.before-django
+.\.venv\Scripts\fashion-finder.exe migrate
+```
+
+Skip `Copy-Item` on a new installation. For the local API, set the same four
+environment variables below with `$env:NAME = "value"` and run
+`.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000`.
 
 ## Source policy
 
@@ -32,10 +58,11 @@ Terminal 1, from the repository root:
 export FASHION_FINDER_DB=data/fashion_finder.sqlite
 export FASHION_FINDER_SOURCE_POLICIES=/absolute/path/to/your-reviewed-policies.json
 export FASHION_FINDER_CORS_ORIGINS=http://localhost:3000
-.venv/bin/uvicorn fashion_finder_data.api.app:app --host 127.0.0.1 --port 8000
+export FASHION_FINDER_SECRET_KEY='set-a-long-random-local-secret'
+.venv/bin/python manage.py runserver 127.0.0.1:8000
 ```
 
-Omit `FASHION_FINDER_SOURCE_POLICIES` to test the default-deny empty catalogue. The health endpoint is `http://127.0.0.1:8000/api/v1/health`; OpenAPI is at `/docs`.
+Omit `FASHION_FINDER_SOURCE_POLICIES` to test the default-deny empty catalogue. The health endpoint is `http://127.0.0.1:8000/api/v1/health`. Django admin is at `/admin/`; create a local staff account with `.venv/bin/python manage.py createsuperuser`. Admin catalogue records are read-only. Store the secret key outside Git; set `FASHION_FINDER_ALLOWED_HOSTS` and HTTPS settings before any non-local deployment. Django's `runserver` is for local development only.
 
 Terminal 2:
 
@@ -60,4 +87,4 @@ npm run test
 npm run build
 ```
 
-The local API uses SQLite and scans eligible rows in memory for search. That is suitable for the initial bounded catalogue, not a large production catalogue. Measure query latency and add database-side filtering/pagination when scale requires it. The web project currently has no persistent analytics or accounts.
+The local API uses SQLite and scans eligible rows in memory for search. That is suitable for the initial bounded catalogue, not a large production catalogue. Measure query latency and add database-side filtering/pagination when scale requires it. The web project currently has no persistent analytics or shopper accounts.

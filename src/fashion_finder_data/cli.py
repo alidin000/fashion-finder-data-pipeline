@@ -25,6 +25,7 @@ def make_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     sources = commands.add_parser("sources", help="Show configured Hungarian storefronts")
     sources.add_argument("action", choices=["list"])
+    commands.add_parser("migrate", help="Adopt or upgrade the local SQLite catalogue for Django")
     collect = commands.add_parser("collect", help="Collect a bounded product sample")
     collect.add_argument("source", choices=[*SOURCES, "all"])
     collect.add_argument(
@@ -88,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
         if not 0 <= args.browser_wait_ms <= 10000:
             parser.error("--browser-wait-ms must be between 0 and 10000")
     engine = open_database(args.data_dir / "fashion_finder.sqlite")
+    if args.command == "migrate":
+        print(f"Migrated {engine.path}")
+        return 0
     if args.command == "collect":
         selected = list(SOURCES.values()) if args.source == "all" else [SOURCES[args.source]]
         started_at = utc_now().isoformat()

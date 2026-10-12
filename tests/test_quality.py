@@ -6,12 +6,11 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import select
-
+from fashion_finder_data.catalogue.models import RetailerOffer
 from fashion_finder_data.pipeline import ingest_records
 from fashion_finder_data.quality import quality_report
 from fashion_finder_data.schema import RawProductRecord
-from fashion_finder_data.storage import offers, open_database
+from fashion_finder_data.storage import open_database
 
 
 def record(sku: str, fetched_at: datetime, *, price: str | None, images: list[str]):
@@ -53,8 +52,7 @@ def test_quality_groups_and_flags_old_missing_offers_without_marking_removed(
     assert result["totals"]["missing_image"] == 1
     assert result["groups"][0]["source_key"] == "reserved"
     assert result["groups"][0]["category"] == "coats"
-    with engine.connect() as connection:
-        statuses = connection.execute(select(offers.c.status)).scalars().all()
+    statuses = list(RetailerOffer.objects.using(engine.alias).values_list("status", flat=True))
     assert statuses == ["active", "active"]
 
 
@@ -62,22 +60,18 @@ def test_quality_detects_malformed_legacy_values(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "catalog.sqlite")
     now = datetime(2026, 10, 12, tzinfo=UTC)
     ingest_records(engine, tmp_path, "reserved", [record("BAD", now, price="25995", images=[])])
-    with engine.begin() as connection:
-        connection.execute(
-            offers.update().values(
-                source_url="http://example.com/wrong-market",
-                price_amount="NaN",
-                currency="huf!",
-                last_seen_at="not-a-date",
-                image_urls="{",
-            )
-        )
+    RetailerOffer.objects.using(engine.alias).update(
+        source_url="http://example.com/wrong-market",
+        price_amount="NaN",
+        currency="huf!",
+        last_seen_at="not-a-date",
+        image_urls="{",
+    )
     counts = quality_report(engine, as_of=now)["totals"]
     assert counts["malformed_url"] == 1
     assert counts["malformed_price"] == 1
     assert counts["malformed_currency"] == 1
     assert counts["malformed_timestamp"] == 1
     assert counts["malformed_image_data"] == 1
-    with engine.begin() as connection:
-        connection.execute(offers.update().values(image_urls=json.dumps(["javascript:bad"])))
+    RetailerOffer.objects.using(engine.alias).update(image_urls=json.dumps(["javascript:bad"]))
     assert quality_report(engine, as_of=now)["totals"]["malformed_image_data"] == 1

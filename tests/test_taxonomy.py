@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from django.db import connections
 
+from fashion_finder_data.catalogue.models import RetailerOffer
 from fashion_finder_data.pipeline import ingest_records
 from fashion_finder_data.quality import quality_report
 from fashion_finder_data.schema import RawProductRecord, normalize
-from fashion_finder_data.storage import offers, open_database
+from fashion_finder_data.storage import open_database
 
 
 def raw(category: str) -> RawProductRecord:
@@ -47,13 +49,14 @@ def test_existing_sqlite_categories_migrate_without_losing_original(tmp_path: Pa
     path = tmp_path / "catalog.sqlite"
     engine = open_database(path)
     ingest_records(engine, tmp_path, "reserved", [raw("Kabátok")])
-    with engine.begin() as connection:
-        connection.exec_driver_sql("ALTER TABLE retailer_offer DROP COLUMN source_category")
-        connection.execute(offers.update().values(category="Kabátok"))
-    engine.dispose()
+    connections[engine.alias].close()
+    with sqlite3.connect(path) as connection:
+        connection.execute("ALTER TABLE retailer_offer DROP COLUMN source_category")
+        connection.execute("UPDATE retailer_offer SET category = ?", ("Kabátok",))
     migrated = open_database(path)
-    with migrated.connect() as connection:
-        row = connection.execute(select(offers.c.category, offers.c.source_category)).one()
+    row = (
+        RetailerOffer.objects.using(migrated.alias).values_list("category", "source_category").get()
+    )
     assert row == ("coats", "Kabátok")
 
 
@@ -64,6 +67,5 @@ def test_sparse_refresh_keeps_last_known_category(tmp_path: Path) -> None:
     later = raw("Kabátok")
     later.product.pop("category")
     ingest_records(engine, tmp_path, "reserved", [later])
-    with engine.connect() as connection:
-        row = connection.execute(select(offers.c.category, offers.c.source_category)).one()
+    row = RetailerOffer.objects.using(engine.alias).values_list("category", "source_category").get()
     assert row == ("coats", "Kabátok")

@@ -8,12 +8,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.engine import Engine
-
 from .collectors import SOURCES, allowed_url
 from .schema import canonical_url, utc_now
-from .storage import offers, retailers
+from .storage import Database, offer_rows
 
 
 def _timestamp(value: str) -> datetime:
@@ -87,7 +84,7 @@ def _metrics(rows: list[dict[str, Any]], now: datetime, cutoff: datetime) -> dic
 
 
 def quality_report(
-    engine: Engine, *, stale_after_days: int = 7, as_of: datetime | None = None
+    engine: Database, *, stale_after_days: int = 7, as_of: datetime | None = None
 ) -> dict[str, Any]:
     """Summarize stored offers; old observations never imply removal or stock state."""
     if not 1 <= stale_after_days <= 3650:
@@ -97,15 +94,7 @@ def quality_report(
         raise ValueError("as-of timestamp must have a timezone")
     now = now.astimezone(UTC)
     cutoff = now - timedelta(days=stale_after_days)
-    with engine.connect() as connection:
-        rows = [
-            dict(row)
-            for row in connection.execute(
-                select(offers, retailers.c.source_key, retailers.c.market_code).join(
-                    retailers, offers.c.retailer_id == retailers.c.id
-                )
-            ).mappings()
-        ]
+    rows = offer_rows(engine)
     grouped: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault((row["source_key"], row["category"]), []).append(row)

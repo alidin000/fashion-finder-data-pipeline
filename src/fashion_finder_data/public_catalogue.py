@@ -10,12 +10,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.engine import Engine
-
 from .schema import is_hungarian_source_url
 from .source_policy import SourcePolicy
-from .storage import offers, retailers
+from .storage import Database, offer_rows
 
 
 def _utc(value: str) -> datetime:
@@ -62,16 +59,12 @@ def _public_offer(row: dict[str, Any], policy: SourcePolicy) -> dict[str, Any]:
     }
 
 
-def _rows(engine: Engine) -> list[dict[str, Any]]:
-    statement = select(offers, retailers.c.source_key, retailers.c.market_code).join(
-        retailers, offers.c.retailer_id == retailers.c.id
-    )
-    with engine.connect() as connection:
-        return [dict(row) for row in connection.execute(statement).mappings()]
+def _rows(engine: Database) -> list[dict[str, Any]]:
+    return offer_rows(engine)
 
 
 def public_offer(
-    engine: Engine,
+    engine: Database,
     offer_id: int,
     policies: dict[tuple[str, str], SourcePolicy],
     *,
@@ -86,7 +79,7 @@ def public_offer(
 
 
 def search_public_catalogue(
-    engine: Engine,
+    engine: Database,
     policies: dict[tuple[str, str], SourcePolicy],
     *,
     query: str | None = None,

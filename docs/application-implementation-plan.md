@@ -42,7 +42,7 @@ Suggested layout, subject to a small design review when implementation starts:
 | Concern | Proposed location | Responsibility |
 | --- | --- | --- |
 | Ingestion and normalization | `src/fashion_finder_data/` | Extend existing package; preserve CLI and exports. |
-| Search service | `src/fashion_finder_data/api/` | FastAPI endpoints and request/response schemas. |
+| Search service | `src/fashion_finder_data/api/` | Django views and versioned JSON response contract. |
 | Browser app | `web/` | Next.js, TypeScript, responsive shopper flow. |
 | Catalogue schema evolution | `src/fashion_finder_data/` plus migration directory | Add source policy, variants, and embeddings without rebuilding existing data. |
 | Tests | `tests/` and `web/` | API contracts, ranking, UI flows, source policy, and failure handling. |
@@ -73,7 +73,7 @@ Extend ingestion with a source-specific policy gate and freshness rule. Do not p
 
 ### C. Add a read-only catalogue API
 
-Implement FastAPI with versioned routes. Prefer shared Pydantic models for validation and OpenAPI output. Reuse existing normalization and search behavior where it fits; avoid importing CLI code into request handlers. The API reads one configured database URL/path and never starts a crawl.
+Implement Django with versioned routes and explicit request validation. Reuse existing normalization and search behavior where it fits; avoid importing CLI code into request handlers. The API reads one configured database path and never starts a crawl. Keep source policy default-deny and source permissions outside the shopper-facing API.
 
 | Route | Request | Minimum response/behavior |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ The public offer object should contain `id`, `source_key`, `source_product_id` w
 
 Define stable sort keys and cursor semantics before pagination. Bound `limit` (for example 1–50), reject invalid price and currency values, and avoid unrestricted SQL filtering. Set a deployment-specific CORS allowlist; no wildcard origin with credentials. If image search is disabled by policy, return a clear capability status rather than a fabricated match.
 
-**Acceptance:** API integration tests cover prices and budgets, pagination without duplicates, unknown stock, stale/prohibited offers, malformed uploads, no-result responses, and source outage isolation. OpenAPI examples match actual responses. A local end-to-end call returns an approved stored offer.
+**Acceptance:** API integration tests cover prices and budgets, pagination without duplicates, unknown stock, stale/prohibited offers, malformed uploads, no-result responses, and source outage isolation. Documented JSON examples match actual responses. A local end-to-end call returns an approved stored offer.
 
 ### D. Extend the catalogue without losing provenance
 
@@ -149,7 +149,7 @@ These are initial decision thresholds, not claims that the present catalogue mee
 | --- | --- | --- | --- |
 | 0, week 1 | Interviews, category choice, 30-task set | Participant consent | Short research note and evaluation set. |
 | 1, parallel | Source policies and two approved feeds/collectors | Retailer/partner access | Policy manifests, sample imports, 30-offer audits. |
-| 2, weeks 2–6 | Collection hardening, schema migration, read API | Current repo and one approved source | Tests, OpenAPI, local end-to-end call. |
+| 2, weeks 2–6 | Collection hardening, schema migration, read API | Current repo and one approved source | Tests, documented JSON contract, local end-to-end call. |
 | 3, weeks 3–6 | Responsive UI and text/budget flow | API contract | Browser flow and mobile evidence. |
 | 4, weeks 4–8 | Permitted image indexing and ranking evaluation | Image rights and labeled tasks | Reproducible 30-task report. |
 | 5, weeks 8–12 | Deployment, live smoke, 10–20 user beta | Release gate | Runbook, measurements, prioritized fixes. |

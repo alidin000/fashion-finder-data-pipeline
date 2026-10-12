@@ -8,10 +8,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from pydantic import ValidationError
-from sqlalchemy.engine import Engine
 
 from .schema import RawProductRecord, normalize, utc_now
-from .storage import save_run, upsert_offer
+from .storage import Database, save_run, upsert_offer
 
 
 def archive_raw(root: Path, source_key: str, run_id: str, records: list[RawProductRecord]) -> Path:
@@ -24,7 +23,7 @@ def archive_raw(root: Path, source_key: str, run_id: str, records: list[RawProdu
 
 
 def ingest_records(
-    engine: Engine,
+    engine: Database,
     root: Path,
     source_key: str,
     records: list[RawProductRecord],
@@ -102,7 +101,7 @@ def ingest_records(
     return report
 
 
-def ingest_jsonl(engine: Engine, root: Path, path: Path, source_key: str) -> dict:
+def ingest_jsonl(engine: Database, root: Path, path: Path, source_key: str) -> dict:
     records: list[RawProductRecord] = []
     errors: list[str] = []
     with path.open(encoding="utf-8") as stream:

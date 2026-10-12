@@ -37,7 +37,7 @@ See [application progress](docs/application-progress.md) for implemented pieces 
 - Scrapy (robots-aware HTTP collection)
 - Playwright for Python (optional Chromium rendering in the collector and diagnostics)
 - Pydantic for schema validation
-- SQLAlchemy + SQLite for local persistence
+- Django ORM and migrations with SQLite for local persistence and catalogue review
 - JSONL for raw snapshots and portable exports
 - Pytest for tests
 
@@ -51,6 +51,10 @@ python -m ruff format --check .
 
 Crawlee was compared on a local fixture and is not a required runtime component.
 The [benchmark and remaining-source decisions](docs/remaining-roadmap-decisions.md) explain why Scrapy remains the default.
+
+The shopper API now runs on Django. Existing SQLite catalogues are adopted by
+`fashion-finder migrate`; see [local app setup](docs/app-local-setup.md) before
+starting the Django server.
 
 ## Windows quick start
 

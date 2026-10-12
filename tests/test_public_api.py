@@ -2,48 +2,44 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 
-import httpx
 import pytest
+from django.test import Client
 from PIL import Image
 
-from fashion_finder_data.api.app import create_app
+from fashion_finder_data.api.views import api_context
 from fashion_finder_data.schema import RetailerOffer
 from fashion_finder_data.source_policy import SourcePolicy, load_policies
 from fashion_finder_data.storage import open_database, upsert_offer
 
 
 class ApiRequester:
-    """Run ASGI requests without Starlette's thread-based portal."""
-
-    def __init__(self, app):
-        self.app = app
+    def __init__(self, path, policy_path=None):
+        self.database = open_database(path)
+        self.policy_path = policy_path
+        self.client = Client()
 
     def __enter__(self):
+        self.bound = api_context(self.database, self.policy_path)
+        self.bound.__enter__()
         return self
 
     def __exit__(self, *_args):
-        return None
+        self.bound.__exit__(*_args)
 
-    def request(self, method: str, path: str, **kwargs):
-        async def call():
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=self.app), base_url="http://test"
-            ) as client:
-                return await client.request(method, path, **kwargs)
+    def get(self, path, params=None):
+        return self.client.get(path, data=params)
 
-        return asyncio.run(call())
-
-    def get(self, path: str, **kwargs):
-        return self.request("GET", path, **kwargs)
-
-    def post(self, path: str, **kwargs):
-        return self.request("POST", path, **kwargs)
+    def post(self, path, files):
+        name, content, media_type = files["file"]
+        stream = BytesIO(content)
+        stream.name = name
+        stream.content_type = media_type
+        return self.client.post(path, data={"file": stream})
 
 
 def add_offer(
@@ -117,12 +113,12 @@ def test_no_policy_denies_publication_and_approved_policy_filters_results(tmp_pa
             source_fetched_at=now,
         ),
     )
-    with ApiRequester(create_app(db_path)) as client:
+    with ApiRequester(db_path) as client:
         assert client.get("/api/v1/search").json()["items"] == []
         assert client.get("/api/v1/offers/1").status_code == 404
 
     path = policy_file(tmp_path)
-    with ApiRequester(create_app(db_path, path)) as client:
+    with ApiRequester(db_path, path) as client:
         response = client.get("/api/v1/search", params={"max_price": "15000", "limit": 1})
         assert response.status_code == 200
         items = response.json()["items"]
@@ -142,7 +138,7 @@ def test_cursor_pages_are_bounded_and_bound_to_filters(tmp_path) -> None:
     engine = open_database(db_path)
     for i in range(4):
         add_offer(engine, str(i), str(10000 + i), datetime.now(UTC))
-    with ApiRequester(create_app(db_path, policy_file(tmp_path, image_display=True))) as client:
+    with ApiRequester(db_path, policy_file(tmp_path, image_display=True)) as client:
         first = client.get("/api/v1/search", params={"limit": 2}).json()
         second = client.get(
             "/api/v1/search", params={"limit": 2, "cursor": first["next_cursor"]}
@@ -167,7 +163,7 @@ def test_policy_revocation_takes_effect_without_restart(tmp_path) -> None:
     db_path = tmp_path / "catalog.sqlite"
     add_offer(open_database(db_path), "x", "10000", datetime.now(UTC))
     path = policy_file(tmp_path)
-    with ApiRequester(create_app(db_path, path)) as client:
+    with ApiRequester(db_path, path) as client:
         assert len(client.get("/api/v1/search").json()["items"]) == 1
         path.write_text("[]", encoding="utf-8")
         assert client.get("/api/v1/search").json()["items"] == []
@@ -183,7 +179,7 @@ def test_unapproved_policy_cannot_grant_rights(tmp_path) -> None:
 
 
 def test_image_endpoint_validates_upload_then_reports_unavailable(tmp_path) -> None:
-    with ApiRequester(create_app(tmp_path / "catalog.sqlite")) as client:
+    with ApiRequester(tmp_path / "catalog.sqlite") as client:
         assert (
             client.post(
                 "/api/v1/search/image", files={"file": ("bad.txt", b"hello", "text/plain")}
@@ -203,3 +199,17 @@ def test_image_endpoint_validates_upload_then_reports_unavailable(tmp_path) -> N
         )
         assert response.status_code == 503
         assert response.json()["detail"] == "image search is not configured"
+
+
+def test_local_web_origin_preflight_is_explicit_and_other_origins_are_denied(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FASHION_FINDER_CORS_ORIGINS", "http://localhost:3000")
+    with ApiRequester(tmp_path / "catalog.sqlite") as client:
+        allowed = client.client.options("/api/v1/search/image", HTTP_ORIGIN="http://localhost:3000")
+        denied = client.client.options(
+            "/api/v1/search/image", HTTP_ORIGIN="https://unrelated.example"
+        )
+    assert allowed.status_code == 204
+    assert allowed["Access-Control-Allow-Origin"] == "http://localhost:3000"
+    assert "Access-Control-Allow-Origin" not in denied

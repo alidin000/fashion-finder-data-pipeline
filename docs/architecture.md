@@ -20,10 +20,10 @@ Retailer / feed / search-results source
         Deduplicate / upsert records
                 |
                 v
-   SQLite offers + price observations + run log
+   Django ORM: SQLite offers + price observations + run log
                 |
                 v
-       JSONL / CSV export for search
+       Django JSON API + JSONL / CSV export
 ```
 
 ## Responsibilities
@@ -57,6 +57,9 @@ Use SQLite initially. Logical tables:
 - `collection_run`
 
 A listing is an offer, not necessarily a globally unique garment. Do not merge similar listings across retailers until there is a separate matching strategy.
+The collector CLI and shopper API share Django models and versioned migrations.
+The Django admin gives staff read-only access to offers, observations, retailers,
+and collection runs. Source publication policy remains an explicit reviewed file.
 
 ### 5. Reporting
 Each run should produce:
@@ -72,6 +75,7 @@ Each run should produce:
 - **Scrapy:** default orchestrator for HTTP crawling, extraction and pagination.
 - **Playwright:** use selectively for pages that require JavaScript-rendered state.
 - **Crawlee for Python:** benchmark as an alternative; do not operate Scrapy and Crawlee as two overlapping schedulers initially.
+- **Django:** catalogue models, migrations, read-only API, and staff review admin.
 
 ## Failure handling
 

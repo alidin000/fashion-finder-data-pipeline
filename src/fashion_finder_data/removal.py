@@ -9,12 +9,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.engine import Engine
-
 from .collectors import SOURCES, allowed_url
 from .schema import utc_now
-from .storage import offers, retailers
+from .storage import Database, offer_rows
 
 SOURCE_POLICY = {
     "reserved": {
@@ -45,7 +42,7 @@ SOURCE_POLICY = {
 
 
 def recheck_report(
-    engine: Engine,
+    engine: Database,
     *,
     stale_after_days: int = 7,
     source_key: str | None = None,
@@ -63,13 +60,9 @@ def recheck_report(
     if now.tzinfo is None:
         raise ValueError("as-of timestamp must have a timezone")
     cutoff = now.astimezone(UTC) - timedelta(days=stale_after_days)
-    query = select(offers, retailers.c.source_key).join(
-        retailers, offers.c.retailer_id == retailers.c.id
-    )
+    rows = offer_rows(engine)
     if source_key:
-        query = query.where(retailers.c.source_key == source_key)
-    with engine.connect() as connection:
-        rows = [dict(row) for row in connection.execute(query).mappings()]
+        rows = [row for row in rows if row["source_key"] == source_key]
     candidates = []
     for row in rows:
         timestamp_problem = None
