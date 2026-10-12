@@ -107,10 +107,32 @@ cannot overwrite an existing review file.
 
 Before approval, use `--all-stored` for an **internal diagnostic sample**.
 Its `public_eligible` column marks rows that cannot count toward the release
-audit. Open each product page and fill in the four verification columns and
-notes. A CSV with fewer than 30 eligible rows cannot satisfy the 30-offer
-audit gate. Keep the completed review and approval evidence private; `data/audits/`
-is ignored by Git.
+audit. Open each product page and fill in `reviewer`, `reviewed_at` (ISO 8601
+with timezone), the four `*_verified` columns (`yes` or `no`), and notes.
+Review the displayed HUF price, category, Hungarian product link, and truthful
+availability/size presentation. A CSV with fewer than 30 eligible rows cannot
+satisfy the 30-offer audit gate. Keep the completed review and approval evidence
+private; `data/audits/` is ignored by Git.
+
+Validate completed CSVs against the current catalogue. Use a separate CSV for
+each source; this command accepts older samples that lack `offer_id` and locates
+those offers by source URL. It rejects duplicate offers and invalid verdicts.
+The report counts a row only when all four verdicts are `yes`, a named reviewer
+and recent timestamp are present, the offer is still public-eligible, and its
+key catalogue fields have not changed since sampling. The review expires after
+the source policy's `freshness_hours` window. Changed or expired rows need a
+fresh page check and a new sample file; do not overwrite the original evidence.
+
+```bash
+.venv/bin/fashion-finder audit-report \
+  data/audits/reserved-jackets.csv data/audits/zara-jackets.csv \
+  --category jackets --policy data/source-policies.json \
+  --output data/reports/jackets-audit.json
+```
+
+`two_source_recorded_audit_pass` summarizes **recorded reviewer verdicts**. The
+command does not visit retailer pages, check agreement text, or establish that
+the full private beta release gate has passed.
 
 ## Checks
 

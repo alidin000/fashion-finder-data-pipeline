@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from . import __version__
+from .audit import audit_report
 from .collectors import SOURCES, crawl
 from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
@@ -93,6 +94,15 @@ def make_parser() -> argparse.ArgumentParser:
         "--all-stored", action="store_true", help="Include nonpublishable offers for internal QA"
     )
     audit.add_argument("--output", type=Path, required=True)
+    audit_results = commands.add_parser(
+        "audit-report", help="Validate completed review CSVs against the current catalogue"
+    )
+    audit_results.add_argument("paths", type=Path, nargs="+")
+    audit_results.add_argument("--category", required=True)
+    audit_results.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    audit_results.add_argument("--output", type=Path, help="Create a JSON report file")
     return parser
 
 
@@ -207,13 +217,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    if args.command in {"readiness", "audit-sample"}:
+    if args.command in {"readiness", "audit-sample", "audit-report"}:
         try:
             policies = load_policies(args.policy)
             if args.command == "readiness":
                 result = readiness_report(engine, policies, args.category)
                 print(json.dumps(result, ensure_ascii=False, indent=2))
-            else:
+            elif args.command == "audit-sample":
                 count = write_audit_sample(
                     engine,
                     policies,
@@ -224,6 +234,14 @@ def main(argv: list[str] | None = None) -> int:
                     all_stored=args.all_stored,
                 )
                 print(f"Wrote {count} audit offers to {args.output}")
+            else:
+                result = audit_report(engine, policies, args.category, args.paths)
+                body = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+                if args.output:
+                    args.output.parent.mkdir(parents=True, exist_ok=True)
+                    with args.output.open("x", encoding="utf-8") as stream:
+                        stream.write(body)
+                print(body, end="")
         except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         return 0

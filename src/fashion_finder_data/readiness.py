@@ -19,6 +19,7 @@ OFFER_TARGET = 100
 AUDIT_TARGET = 30
 
 AUDIT_FIELDS = (
+    "offer_id",
     "source_key",
     "source_product_id",
     "title",
@@ -171,6 +172,7 @@ def write_audit_sample(
         writer.writeheader()
         for row, visible in sample:
             values = {
+                "offer_id": row["id"],
                 "source_key": source_key,
                 "source_product_id": row["source_product_id"],
                 "title": row["title"],
