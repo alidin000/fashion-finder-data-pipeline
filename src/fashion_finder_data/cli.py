@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from . import __version__
@@ -11,6 +12,7 @@ from .collectors import SOURCES, crawl
 from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .schema import utc_now
+from .search import search_catalogue
 from .storage import export_catalogue, load_run, open_database
 
 
@@ -40,6 +42,16 @@ def make_parser() -> argparse.ArgumentParser:
     export.add_argument("--source", choices=SOURCES)
     report = commands.add_parser("report", help="Show one collection run")
     report.add_argument("run_id")
+    search = commands.add_parser("search", help="Search the local HUF catalogue")
+    search.add_argument("--query", help="Words in title, brand, or description")
+    search.add_argument("--source", choices=SOURCES)
+    search.add_argument("--category", help="Exact normalized category, such as coats")
+    search.add_argument("--max-price", help="Maximum price in the selected currency")
+    search.add_argument("--currency", default="HUF", help="Exact currency (default: HUF)")
+    search.add_argument(
+        "--sort", choices=["price-asc", "price-desc", "recent"], default="price-asc"
+    )
+    search.add_argument("--limit", type=int, default=20, help="Maximum results (1–100)")
     return parser
 
 
@@ -100,6 +112,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Run not found: {args.run_id}")
             return 1
         print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "search":
+        try:
+            max_price = Decimal(args.max_price) if args.max_price is not None else None
+            results = search_catalogue(
+                engine,
+                query=args.query,
+                source=args.source,
+                category=args.category,
+                currency=args.currency.strip().upper(),
+                max_price=max_price,
+                sort=args.sort,
+                limit=args.limit,
+            )
+        except (InvalidOperation, ValueError) as exc:
+            parser.error(str(exc))
+        for item in results:
+            print(json.dumps(item, ensure_ascii=False))
         return 0
     return 2
 

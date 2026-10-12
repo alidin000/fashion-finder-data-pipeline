@@ -69,6 +69,15 @@ Reserved recognizes the public `kabatok`, `ruhak`, and `puloverek` category path
 
 Every collection writes raw JSONL under `data/raw/<source>/`, a run report under `data/reports/`, offers and price changes in `data/fashion_finder.sqlite`, and refreshed JSONL/CSV exports under `data/exports/`. These local outputs are ignored by Git. Repeat runs update an offer and add a price observation only when its price or currency changes.
 
+Search the stored HUF offers without making another retailer request:
+
+```powershell
+fashion-finder search --query dzseki --max-price 30000 --sort price-asc
+fashion-finder search --category dresses --source reserved --sort recent --limit 10
+```
+
+Search returns JSONL with source links, prices, category, image URLs, and last-seen time. The default currency is HUF; use `--currency` for another stored currency. Budget comparisons and price sorting use exact decimal values within one currency. Results reflect the last collection, so unknown stock remains `unknown`.
+
 To replay a raw file without network access:
 
 ```powershell

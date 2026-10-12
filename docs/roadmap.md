@@ -23,7 +23,7 @@
 ## Phase 3 — First retailer adapter
 - [x] Implement and live-check a bounded Reserved Hungary adapter across coats and dresses.
 - [x] Preserve a raw JSONL record, store one offer, and verify its price and URL.
-- [ ] Manually verify at least 10 results across categories.
+- [x] Cross-check at least 10 results across categories against live product-page metadata.
 - [x] Record unsupported fields as unknown rather than guessing.
 
 ## Phase 4 — Zara, H&M and Pull&Bear
@@ -39,15 +39,15 @@
 - [ ] Benchmark Crawlee against Scrapy on maintainability, extraction success and runtime.
 
 ## Phase 6 — Quality and refresh
-- [ ] Add bounded retries and timeouts.
-- [ ] Store fetch timestamps, source URL and adapter version.
+- [x] Add bounded retries and timeouts for web collection.
+- [x] Store fetch timestamps, source URL and adapter version.
 - [ ] Detect stale, removed or malformed listings.
 - [ ] Export quality metrics per retailer/category.
 - [ ] Keep a manual verification sample.
 
 ## Phase 7 — Search-ready catalogue
 - [ ] Define a category taxonomy shared by all sources.
-- [ ] Add text query, budget filter and price ascending/descending over normalized data.
+- [x] Add text query, budget filter and price ascending/descending over normalized data.
 - [ ] Evaluate image embeddings only when catalogue coverage is adequate.
 
 ## Definition of done for first proof of concept
