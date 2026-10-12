@@ -6,7 +6,7 @@ A local-first proof of concept for collecting, normalizing, and comparing fashio
 
 Build a **local product-ingestion pipeline** for Fashion Finder. It should collect small test batches, preserve raw records, normalize them to a common product-offer schema, track price observations, and export a catalogue for the search frontend.
 
-The first pipeline is implemented. Reserved Hungary passed a one-product live run on 2026-10-12. Zara and Pull&Bear returned pages without usable product data, and H&M returned HTTP 403 in that run. These sources are configured and reported separately, but are **not verified working collectors**. They need an allowed feed, site-compatible extraction, or explicit product URLs that expose structured data; do not use access-control bypasses.
+The first pipeline is implemented. Reserved Hungary passed live runs of ten coats and three dresses on 2026-10-12. Zara and Pull&Bear returned pages without usable product data, and the H&M Scrapy run received HTTP 403. These sources are configured and reported separately, but are **not verified working collectors**. They need an allowed feed or documented access method; do not use access-control bypasses.
 
 ## Initial source strategy
 
@@ -58,11 +58,14 @@ From the repository root, try one bounded Reserved sample:
 fashion-finder sources list
 fashion-finder collect reserved --limit 1
 fashion-finder collect all --limit 1
+fashion-finder collect reserved --limit 3 --url https://www.reserved.com/hu/hu/noi/ruhak
 fashion-finder report <run-id>
 fashion-finder export data/exports/catalogue.csv
 ```
 
 `collect all` reports each retailer independently and exits nonzero when any source fails. Use `--url https://...` with a single source to test a specific Hungarian category or product URL. Only HTTPS pages on that retailer's Hungarian storefront are accepted. The CLI never logs in, solves CAPTCHAs, or works around HTTP 403.
+
+Reserved recognizes the public `kabatok`, `ruhak`, and `puloverek` category paths as coats, dresses, and sweaters. Other Reserved category overrides retain an unknown category until mapped. The H&M adapter can read complete HUF offers from category cards if the page is accessible, but the live Scrapy check here was blocked before parsing.
 
 Every collection writes raw JSONL under `data/raw/<source>/`, a run report under `data/reports/`, offers and price changes in `data/fashion_finder.sqlite`, and refreshed JSONL/CSV exports under `data/exports/`. These local outputs are ignored by Git. Repeat runs update an offer and add a price observation only when its price or currency changes.
 
@@ -71,6 +74,21 @@ To replay a raw file without network access:
 ```powershell
 fashion-finder ingest reserved data/raw/reserved/<run-id>.jsonl
 ```
+
+If a retailer provides an authorized product export, import a local CSV:
+
+```powershell
+fashion-finder import-feed zara path/to/authorized-products.csv
+```
+
+The CSV needs `product_url,name,price,currency` headers. Optional headers are
+`sku,brand,category,description,original_price,image_url,colour,size,availability`.
+Use one product per row, a full HTTPS URL on that retailer's Hungarian storefront,
+and `HUF` prices. The command reads a local file; it does not fetch a feed URL or
+grant permission to collect retailer content. Valid rows enter the same raw archive,
+database, exports, and run report as web collection. Invalid rows are counted and
+reported; a partial import exits nonzero. This path is ready for supplied feeds,
+but no Zara, H&M, or Pull&Bear feed has been provided or verified.
 
 The first category page only is sampled; pagination and full-catalogue coverage are not implemented. The limit is 1–100 product pages per source, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
 

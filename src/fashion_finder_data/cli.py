@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import __version__
 from .collectors import SOURCES, crawl
+from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .schema import utc_now
 from .storage import export_catalogue, load_run, open_database
@@ -31,6 +32,9 @@ def make_parser() -> argparse.ArgumentParser:
     ingest = commands.add_parser("ingest", help="Replay a raw JSONL snapshot")
     ingest.add_argument("source", choices=SOURCES)
     ingest.add_argument("path", type=Path)
+    feed = commands.add_parser("import-feed", help="Import an authorized local product CSV")
+    feed.add_argument("source", choices=SOURCES)
+    feed.add_argument("path", type=Path)
     export = commands.add_parser("export", help="Export the stored catalogue")
     export.add_argument("path", type=Path)
     export.add_argument("--source", choices=SOURCES)
@@ -76,6 +80,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ingest":
         report = ingest_jsonl(engine, args.data_dir, args.path, args.source)
         print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["status"] == "success" else 1
+    if args.command == "import-feed":
+        try:
+            report = import_feed(engine, args.data_dir, args.path, args.source)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(report, ensure_ascii=False))
+        export_catalogue(engine, args.data_dir / "exports" / "catalogue.jsonl")
+        export_catalogue(engine, args.data_dir / "exports" / "catalogue.csv")
         return 0 if report["status"] == "success" else 1
     if args.command == "export":
         count = export_catalogue(engine, args.path, args.source)

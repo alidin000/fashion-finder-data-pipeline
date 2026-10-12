@@ -33,6 +33,7 @@ def ingest_records(
     started_at: str | None = None,
     archive: bool = True,
     discovered: int | None = None,
+    preparse_rejected: int = 0,
 ) -> dict:
     run_id = run_id or uuid4().hex
     started_at = started_at or utc_now().isoformat()
@@ -73,9 +74,9 @@ def ingest_records(
         "status": "success" if valid and not errors else "partial" if valid else "failed",
         "records_discovered": discovered if discovered is not None else len(records),
         "records_parsed": len(records),
-        "records_seen": len(records),
+        "records_seen": len(records) + preparse_rejected,
         "records_valid": valid,
-        "records_rejected": rejected,
+        "records_rejected": rejected + preparse_rejected,
         "records_upserted": upserted,
         "records_deduplicated": deduplicated,
         "error_summary": dict(errors),
@@ -83,7 +84,14 @@ def ingest_records(
             key: round(completeness[key] / valid, 3) if valid else 0.0
             for key in ("price", "currency", "image_url", "product_url")
         },
-        "adapter_version": "1",
+        "adapter_version": (
+            records[0].adapter_version
+            if records
+            and all(item.adapter_version == records[0].adapter_version for item in records)
+            else "mixed"
+            if records
+            else "unknown"
+        ),
     }
     save_run(engine, report)
     report_path = root / "reports" / f"{run_id}.json"
@@ -105,4 +113,12 @@ def ingest_jsonl(engine: Engine, root: Path, path: Path, source_key: str) -> dic
                 records.append(RawProductRecord.model_validate_json(line))
             except (ValueError, ValidationError) as exc:
                 errors.append(f"raw line {number}: {type(exc).__name__}")
-    return ingest_records(engine, root, source_key, records, errors)
+    return ingest_records(
+        engine,
+        root,
+        source_key,
+        records,
+        errors,
+        discovered=len(records) + len(errors),
+        preparse_rejected=len(errors),
+    )

@@ -21,13 +21,14 @@
 - [x] Generate a run report with field completeness.
 
 ## Phase 3 — First retailer adapter
-- [x] Implement and live-check a bounded Reserved Hungary adapter.
+- [x] Implement and live-check a bounded Reserved Hungary adapter across coats and dresses.
 - [x] Preserve a raw JSONL record, store one offer, and verify its price and URL.
 - [ ] Manually verify at least 10 results across categories.
 - [x] Record unsupported fields as unknown rather than guessing.
 
 ## Phase 4 — Zara, H&M and Pull&Bear
 - [ ] Obtain allowed access or feeds for the three currently blocked/unparseable storefronts.
+- [x] Add a local CSV importer for retailer-provided authorized product feeds.
 - [ ] Verify source-specific extraction on small Hungarian samples.
 - [x] Make each configured collector independently runnable.
 - [x] Ensure one adapter failure does not terminate the whole pipeline.

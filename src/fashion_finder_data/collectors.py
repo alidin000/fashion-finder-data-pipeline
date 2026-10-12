@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -20,7 +20,7 @@ class Source:
     key: str
     host: str
     category_url: str
-    category: str
+    category: str | None
     product_pattern: str
     card_selector: str | None = None
 
@@ -57,6 +57,23 @@ SOURCES = {
         r"-p\d+\.html(?:$|\?)",
     ),
 }
+
+RESERVED_CATEGORIES = {
+    "/hu/hu/noi/ruhazat/kabatok": "coats",
+    "/hu/hu/noi/kabatok": "coats",
+    "/hu/hu/noi/ruhak": "dresses",
+    "/hu/hu/noi/puloverek": "sweaters",
+}
+
+
+def source_for_page(source: Source, url: str) -> Source:
+    if source.key != "reserved":
+        return source
+    path = urlsplit(url).path.rstrip("/")
+    for prefix, category in RESERVED_CATEGORIES.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return replace(source, category=category)
+    return replace(source, category=None)
 
 
 def allowed_url(source: Source, value: str) -> bool:
@@ -96,6 +113,50 @@ def product_links(response: Response, source: Source, limit: int) -> list[str]:
         if len(links) >= limit:
             break
     return links
+
+
+def extract_hm_cards(response: Response, source: Source, limit: int) -> list[RawProductRecord]:
+    """Read complete H&M offers from public category cards without product requests."""
+    records: list[RawProductRecord] = []
+    seen: set[str] = set()
+    for card in response.css("article[data-articlecode]"):
+        url = urljoin(response.url, card.css('a[href*="productpage."]::attr(href)').get() or "")
+        sku = card.attrib.get("data-articlecode")
+        name = card.css('a[href*="productpage."]::attr(title)').get()
+        prices = card.xpath('.//span[contains(normalize-space(text()), "Ft")]/text()').getall()
+        prices = [price.strip() for price in prices if price.strip()]
+        if (
+            not allowed_url(source, url)
+            or not re.search(source.product_pattern, url, re.IGNORECASE)
+            or not sku
+            or not name
+            or len(prices) != 1
+            or url in seen
+        ):
+            continue
+        image = card.css("img::attr(data-src)").get() or card.css("img::attr(src)").get()
+        seen.add(url)
+        records.append(
+            RawProductRecord(
+                source_key="hm",
+                market_code="HU",
+                source_url=response.url,
+                fetched_at=utc_now(),
+                adapter_version="hm-category-v1",
+                product={
+                    "url": url,
+                    "sku": sku,
+                    "name": name,
+                    "category": source.category,
+                    "price": prices[0],
+                    "currency": "HUF",
+                    "images": [image] if image and image.startswith("https://") else [],
+                },
+            )
+        )
+        if len(records) >= limit:
+            break
+    return records
 
 
 def _product_node(obj: Any) -> dict[str, Any] | None:
@@ -232,6 +293,18 @@ class ProductSpider(scrapy.Spider):
         self.state.error(source, f"request failed: {type(failure.value).__name__}{status}")
 
     def parse_page(self, response: Response, source: Source):
+        source = source_for_page(source, response.url)
+        if source.key == "hm" and not re.search(
+            source.product_pattern, response.url, re.IGNORECASE
+        ):
+            records = extract_hm_cards(response, source, self.limit)
+            self.state.discovered[source.key] = self.state.discovered.get(source.key, 0) + len(
+                records
+            )
+            self.state.records.setdefault(source.key, []).extend(records)
+            if not records:
+                self.state.error(source.key, "no complete HUF product cards on category page")
+            return
         try:
             record = extract_product(response, source)
         except ValueError:
