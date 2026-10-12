@@ -1,0 +1,57 @@
+name: fashion-finder
+
+x-api-base: &api-base
+  image: fashion-finder-api:local
+  user: ${FASHION_FINDER_UID:-1000}:${FASHION_FINDER_GID:-1000}
+  volumes:
+    - ${FASHION_FINDER_DATA_DIR:-./data}:/data
+  environment:
+    FASHION_FINDER_DB: /data/fashion_finder.sqlite
+    FASHION_FINDER_SOURCE_POLICIES: /data/source-policies.json
+    FASHION_FINDER_SECRET_KEY: ${FASHION_FINDER_SECRET_KEY:?Set a local random secret in .env}
+    FASHION_FINDER_ALLOWED_HOSTS: localhost,127.0.0.1,api
+    FASHION_FINDER_CORS_ORIGINS: http://localhost:${FASHION_FINDER_WEB_PORT:-3000},http://127.0.0.1:${FASHION_FINDER_WEB_PORT:-3000}
+    FASHION_FINDER_ANALYTICS_ENABLED: ${FASHION_FINDER_ANALYTICS_ENABLED:-0}
+
+services:
+  migrate:
+    <<: *api-base
+    command: ["fashion-finder", "--data-dir", "/data", "migrate"]
+    restart: "no"
+
+  api:
+    <<: *api-base
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${FASHION_FINDER_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web:
+    image: fashion-finder-web:local
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FASHION_FINDER_WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+
+  worker:
+    <<: *api-base
+    command: ["fashion-finder-worker", "--data-dir", "/data", "--interval-seconds", "3600"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped

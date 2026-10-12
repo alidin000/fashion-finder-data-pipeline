@@ -9,6 +9,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import urlsplit
 
 from django.db.models import Q
 
@@ -20,6 +21,19 @@ from .storage import Database, offer_rows
 def _utc(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _safe_image_url(value: str) -> bool:
+    try:
+        parts = urlsplit(value)
+        return (
+            parts.scheme == "https"
+            and bool(parts.hostname)
+            and not parts.username
+            and not parts.password
+        )
+    except ValueError:
+        return False
 
 
 def _visible(
@@ -66,7 +80,9 @@ def _public_offer(row: dict[str, Any], policy: SourcePolicy) -> dict[str, Any]:
         "price_amount": row["price_amount"],
         "currency": row["currency"],
         "source_url": row["source_url"],
-        "image_urls": json.loads(row["image_urls"]) if policy.allow_image_display else [],
+        "image_urls": [url for url in json.loads(row["image_urls"]) if _safe_image_url(url)]
+        if policy.allow_image_display
+        else [],
         "colour_names": json.loads(row["colour_names"]),
         "size_options": json.loads(row["size_options"]),
         "availability_status": row["availability_status"],

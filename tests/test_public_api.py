@@ -172,6 +172,26 @@ def test_policy_revocation_takes_effect_without_restart(tmp_path) -> None:
         assert client.get("/api/v1/search").json()["items"] == []
 
 
+def test_public_images_include_only_safe_https_urls(tmp_path) -> None:
+    db_path = tmp_path / "catalog.sqlite"
+    database = open_database(db_path)
+    add_offer(database, "safe-image", "10000", datetime.now(UTC))
+    StoredOffer.objects.using(database.alias).update(
+        image_urls=json.dumps(
+            [
+                "http://images.reserved.com/old.jpg",
+                "javascript:alert(1)",
+                "https://[",
+                "https://images.reserved.com/safe.jpg",
+            ]
+        )
+    )
+    with ApiRequester(db_path, policy_file(tmp_path, image_display=True)) as client:
+        response = client.get("/api/v1/search")
+    assert response.status_code == 200
+    assert response.json()["items"][0]["image_urls"] == ["https://images.reserved.com/safe.jpg"]
+
+
 def test_unapproved_policy_cannot_grant_rights(tmp_path) -> None:
     with pytest.raises(ValueError, match="unapproved"):
         SourcePolicy(source_key="reserved", allow_public_listing=True)

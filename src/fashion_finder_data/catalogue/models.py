@@ -96,3 +96,31 @@ class CollectionRun(models.Model):
 
     class Meta:
         db_table = "collection_run"
+
+
+class DailyMetric(models.Model):
+    day = models.DateField()
+    event_type = models.CharField(max_length=20)
+    source_key = models.CharField(max_length=32, default="")
+    search_type = models.CharField(max_length=10)
+    filtered = models.BooleanField(default=False)
+    result_bucket = models.CharField(max_length=10, default="")
+    error_code = models.CharField(max_length=20, default="")
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "daily_metric"
+        constraints = (
+            models.UniqueConstraint(
+                fields=[
+                    "day",
+                    "event_type",
+                    "source_key",
+                    "search_type",
+                    "filtered",
+                    "result_bucket",
+                    "error_code",
+                ],
+                name="daily_metric_dimensions",
+            ),
+        )

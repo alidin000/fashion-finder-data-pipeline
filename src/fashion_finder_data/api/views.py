@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import warnings
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from PIL import Image, UnidentifiedImageError
 
+from fashion_finder_data.analytics import record_metric
 from fashion_finder_data.catalogue.models import RetailerOffer
 from fashion_finder_data.public_catalogue import public_offer, search_public_catalogue
 from fashion_finder_data.source_policy import load_policies
@@ -62,8 +64,32 @@ def health(request):
         .first()
     )
     return JsonResponse(
-        {"status": "ok", "catalogue_timestamp": checked, "image_search": "unavailable"}
+        {
+            "status": "ok",
+            "catalogue_timestamp": checked,
+            "image_search": "unavailable",
+            "analytics_enabled": os.environ.get("FASHION_FINDER_ANALYTICS_ENABLED") == "1",
+        }
     )
+
+
+@csrf_exempt
+def event(request):
+    if request.method != "POST":
+        return _error("method not allowed", 405)
+    if os.environ.get("FASHION_FINDER_ANALYTICS_ENABLED") != "1":
+        return _error("analytics disabled", 404)
+    if request.content_type != "application/json":
+        return _error("JSON required", 415)
+    if len(request.body) > 1024:
+        return _error("event too large", 413)
+    try:
+        payload = json.loads(request.body)
+        database, policy_path = _config()
+        record_metric(database, payload, load_policies(policy_path))
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return _error("invalid event", 400)
+    return JsonResponse({"status": "recorded"}, status=201)
 
 
 def search(request):

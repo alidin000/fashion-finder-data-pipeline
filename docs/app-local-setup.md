@@ -2,6 +2,9 @@
 
 The shopper app reads the existing SQLite catalogue. The API publishes **no offers** until a source policy grants that use. The [example policy](../config/source-policies.example.json) is deliberately pending. Do not mark a source approved without permission evidence for the intended use.
 
+For a local deployment with web, API, and feed worker services, use the [Docker runbook](local-docker-runbook.md).
+For the 30 consented shopper tasks, use the [evaluation guide](task-evaluation-guide.md).
+
 ## Requirements
 
 - Python 3.12
@@ -69,7 +72,7 @@ Terminal 2:
 ```bash
 cd web
 npm ci
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
+npm run dev
 ```
 
 Open `http://localhost:3000`. The search form calls the API without crawling retailers. A phrase such as `black jacket under 15000 Ft` fills the HUF budget and filters higher-priced offers. Images are displayed only if the active source policy permits display. Photo upload shows a local preview; image matching returns HTTP 503 until approved image sources, a versioned index, and the 30-task evaluation exist. The server validates uploaded type, bytes, and dimensions and does not retain the upload. Put a request-size cap at the reverse proxy before Internet deployment.

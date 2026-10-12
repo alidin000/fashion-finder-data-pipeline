@@ -4,7 +4,7 @@
 - [x] Document initial architecture and candidate sources.
 - [x] Record point-in-time code licence findings.
 - [x] Create Python package and local development environment.
-- [x] No secrets are configured; `.env.example` is unnecessary until a credentialed source is added. Never commit real tokens.
+- [x] Local Docker uses an ignored `.env` for its random Django secret. `.env.example` contains no secret. Never commit real tokens.
 
 ## Phase 1 — Data contract and fixtures
 - [x] Define RawProductRecord, RetailerOffer and CollectionRun schemas.

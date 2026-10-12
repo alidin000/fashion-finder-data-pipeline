@@ -40,3 +40,11 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: docker build -f Dockerfile.api -t fashion-finder-api:ci .
+      - run: docker build -f web/Dockerfile -t fashion-finder-web:ci web

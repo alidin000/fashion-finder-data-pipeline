@@ -7,10 +7,9 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from .collectors import SOURCES
-from .public_catalogue import _visible
+from .public_catalogue import _safe_image_url, _visible
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
 from .taxonomy import CATEGORIES
@@ -55,21 +54,7 @@ def _image_candidate(row: dict, policy: SourcePolicy) -> bool:
         return False
     if not isinstance(images, list):
         return False
-    for url in images:
-        if not isinstance(url, str):
-            continue
-        try:
-            parts = urlsplit(url)
-            if (
-                parts.scheme == "https"
-                and parts.hostname
-                and not parts.username
-                and not parts.password
-            ):
-                return True
-        except ValueError:
-            continue
-    return False
+    return any(isinstance(url, str) and _safe_image_url(url) for url in images)
 
 
 def readiness_report(

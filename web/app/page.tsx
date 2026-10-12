@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element -- Do not proxy retailer images; previews are local blob URLs. */
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { clickEvent, errorEvent, MetricEvent, searchEvent, SearchType } from "../lib/analytics";
 import { parseSearchInput } from "../lib/query";
 
 type Offer = {
@@ -24,7 +25,7 @@ type Offer = {
 
 type SearchResponse = { items: Offer[]; next_cursor: string | null };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 const money = new Intl.NumberFormat("hu-HU", { maximumFractionDigits: 0 });
 
 function formatHuf(amount: string) {
@@ -62,7 +63,19 @@ export default function Home() {
   const [preview, setPreview] = useState<string | null>(null);
   const [photoMessage, setPhotoMessage] = useState("");
   const [photoCapability, setPhotoCapability] = useState(false);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
   const requestSerial = useRef(0);
+  const lastSearchType = useRef<SearchType>("text");
+
+  function sendMetric(event: MetricEvent) {
+    if (!analyticsEnabled) return;
+    void fetch(`${API_BASE}/api/v1/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+      keepalive: true,
+    }).catch(() => undefined);
+  }
 
   useEffect(() => {
     return () => {
@@ -73,7 +86,10 @@ export default function Home() {
   useEffect(() => {
     void fetch(`${API_BASE}/api/v1/health`)
       .then((response) => response.json())
-      .then((health: { image_search?: string }) => setPhotoCapability(health.image_search === "available"))
+      .then((health: { image_search?: string; analytics_enabled?: boolean }) => {
+        setPhotoCapability(health.image_search === "available");
+        setAnalyticsEnabled(health.analytics_enabled === true);
+      })
       .catch(() => setPhotoCapability(false));
   }, []);
 
@@ -94,23 +110,28 @@ export default function Home() {
     params.set("sort", sort);
     params.set("limit", "20");
     if (cursor) params.set("cursor", cursor);
+    let responseStatus: number | null = null;
     try {
       const response = await fetch(`${API_BASE}/api/v1/search?${params}`, { cache: "no-store" });
+      responseStatus = response.status;
       if (!response.ok) throw new Error(`Search failed (${response.status}). Check the API and filters.`);
       const result = (await response.json()) as SearchResponse;
       if (serial !== requestSerial.current) return;
       setItems((old) => (cursor ? [...old, ...result.items] : result.items));
       setNextCursor(result.next_cursor);
       setStatus("ready");
+      if (!cursor) sendMetric(searchEvent("text", Boolean(category || colour || size || chosenBudget || source), result.items.length));
     } catch (cause) {
       if (serial !== requestSerial.current) return;
       setError(cause instanceof Error ? cause.message : "Search is unavailable.");
       setStatus("error");
+      sendMetric(errorEvent("text", responseStatus));
     }
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    lastSearchType.current = "text";
     const parsed = parseSearchInput(query, maxPrice);
     setQuery(parsed.query);
     setMaxPrice(parsed.maxPrice);
@@ -130,6 +151,7 @@ export default function Home() {
       return;
     }
     setPhotoMessage("Checking your photo…");
+    let responseStatus: number | null = null;
     const data = new FormData();
     data.append("file", photo);
     try {
@@ -137,22 +159,28 @@ export default function Home() {
         method: "POST",
         body: data,
       });
+      responseStatus = response.status;
       if (response.status === 503) {
         setPhotoMessage("Photo matching is awaiting an approved image catalogue. Try text search for now.");
+        sendMetric(errorEvent("photo", responseStatus));
         return;
       }
       if (!response.ok) {
         const body = (await response.json()) as { detail?: string };
         setPhotoMessage(body.detail ?? "This photo could not be used.");
+        sendMetric(errorEvent("photo", responseStatus));
         return;
       }
       const result = (await response.json()) as SearchResponse;
       setItems(result.items);
       setNextCursor(result.next_cursor);
       setStatus("ready");
+      lastSearchType.current = "photo";
+      sendMetric(searchEvent("photo", Boolean(category || colour || size || maxPrice || source), result.items.length));
       setPhotoMessage("Showing visually similar offers below.");
     } catch {
       setPhotoMessage("The API is unavailable. Start it locally and try again.");
+      sendMetric(errorEvent("photo", responseStatus));
     }
   }
 
@@ -206,10 +234,10 @@ export default function Home() {
           {status === "loading" && <div className="empty-state" role="status"><h3>Finding your options…</h3></div>}
           {status === "error" && <div className="empty-state error-state" role="alert"><h3>Search is unavailable</h3><p>{error}</p></div>}
           {status === "ready" && items.length === 0 && <div className="empty-state"><span>◇</span><h3>No current offers found.</h3><p>Try a wider budget or category. Only approved, recently checked offers appear here.</p></div>}
-          {items.length > 0 && <div className="offer-grid">{items.map((item) => <article className="offer-card" key={item.id}><div className="offer-image">{item.image_urls[0] ? <img src={item.image_urls[0]} alt={item.title} loading="lazy" /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}<span className="match-pill">{matchName(item.match_type)}</span></div><div className="offer-info"><span className="offer-source">{sourceName(item.source_key)}</span><h3>{item.title}</h3><div className="offer-bottom"><strong>{formatHuf(item.price_amount)}</strong><a href={item.source_url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${item.title} at ${sourceName(item.source_key)}`}>View item <span aria-hidden>↗</span></a></div><p className="offer-meta">Checked {new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeZone: "Europe/Budapest" }).format(new Date(item.last_checked_at))} · Stock {item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ")}</p>{item.attribution && <p className="offer-meta">{item.attribution}</p>}</div></article>)}</div>}
+          {items.length > 0 && <div className="offer-grid">{items.map((item) => <article className="offer-card" key={item.id}><div className="offer-image">{item.image_urls[0] ? <img src={item.image_urls[0]} alt={item.title} loading="lazy" /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}<span className="match-pill">{matchName(item.match_type)}</span></div><div className="offer-info"><span className="offer-source">{sourceName(item.source_key)}</span><h3>{item.title}</h3><div className="offer-bottom"><strong>{formatHuf(item.price_amount)}</strong><a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => sendMetric(clickEvent(lastSearchType.current, item.source_key))} aria-label={`Open ${item.title} at ${sourceName(item.source_key)}`}>View item <span aria-hidden>↗</span></a></div><p className="offer-meta">Checked {new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeZone: "Europe/Budapest" }).format(new Date(item.last_checked_at))} · Stock {item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ")}</p>{item.attribution && <p className="offer-meta">{item.attribution}</p>}</div></article>)}</div>}
           {status === "ready" && nextCursor && <button className="load-more" type="button" onClick={() => void search(nextCursor)}>Load more finds ↓</button>}
         </section>
-        <footer><span>FASHION FINDER</span><p>Prices and availability are checked at the time shown. Final details are on the retailer website.</p></footer>
+        <footer><span>FASHION FINDER</span><p>Prices and availability are checked at the time shown. Final details are on the retailer website.</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
       </div>
     </main>
   );

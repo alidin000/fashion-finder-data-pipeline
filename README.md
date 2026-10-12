@@ -30,6 +30,9 @@ See [architecture](docs/architecture.md), [data schema](docs/data-schema.md), an
 See [live Hungarian source status](docs/live-source-status.md) for the latest bounded check.
 The [application implementation plan](docs/application-implementation-plan.md) and [local app setup](docs/app-local-setup.md) cover the read-only API and shopper web app. Public results require an explicit approved source policy; without one, the API returns an empty catalogue.
 See [application progress](docs/application-progress.md) for implemented pieces and beta blockers.
+The [local Docker runbook](docs/local-docker-runbook.md) covers the web, API,
+timestamped-feed worker, backups, and monitoring. The [task evaluation guide](docs/task-evaluation-guide.md)
+defines the consented 30-task report.
 
 ## Initial stack
 

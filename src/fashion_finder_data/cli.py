@@ -11,6 +11,7 @@ from pathlib import Path
 from . import __version__
 from .audit import audit_report
 from .collectors import SOURCES, crawl
+from .evaluation import evaluate_tasks
 from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
@@ -103,6 +104,18 @@ def make_parser() -> argparse.ArgumentParser:
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
     audit_results.add_argument("--output", type=Path, help="Create a JSON report file")
+    evaluation = commands.add_parser(
+        "evaluate-tasks", help="Score consented shopper-task labels against current offers"
+    )
+    evaluation.add_argument("path", type=Path)
+    evaluation.add_argument("--category", required=True)
+    evaluation.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    evaluation.add_argument("--output", type=Path, help="Create a JSON report file")
+    metrics = commands.add_parser("analytics-report", help="Show anonymous daily event totals")
+    metrics.add_argument("--days", type=int, default=7)
+    metrics.add_argument("--output", type=Path, help="Create a JSON report file")
     return parser
 
 
@@ -217,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    if args.command in {"readiness", "audit-sample", "audit-report"}:
+    if args.command in {"readiness", "audit-sample", "audit-report", "evaluate-tasks"}:
         try:
             policies = load_policies(args.policy)
             if args.command == "readiness":
@@ -235,7 +248,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"Wrote {count} audit offers to {args.output}")
             else:
-                result = audit_report(engine, policies, args.category, args.paths)
+                result = (
+                    audit_report(engine, policies, args.category, args.paths)
+                    if args.command == "audit-report"
+                    else evaluate_tasks(engine, policies, args.category, args.path)
+                )
                 body = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
                 if args.output:
                     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -244,6 +261,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(body, end="")
         except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
+        return 0
+    if args.command == "analytics-report":
+        from .analytics import metric_report
+
+        try:
+            body = (
+                json.dumps(metric_report(engine, days=args.days), ensure_ascii=False, indent=2)
+                + "\n"
+            )
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                with args.output.open("x", encoding="utf-8") as stream:
+                    stream.write(body)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(body, end="")
         return 0
     return 2
 

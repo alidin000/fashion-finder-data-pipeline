@@ -33,6 +33,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "fashion_finder_data.django_project.cors.CorsMiddleware",
 ]
+if os.environ.get("FASHION_FINDER_SERVE_STATIC") == "1":
+    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
 ROOT_URLCONF = "fashion_finder_data.django_project.urls"
 TEMPLATES = [
     {
@@ -62,6 +64,11 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_TZ = True
 STATIC_URL = "static/"
+STATIC_ROOT = Path(os.environ.get("FASHION_FINDER_STATIC_ROOT", BASE_DIR / "staticfiles"))
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
