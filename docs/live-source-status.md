@@ -2,6 +2,12 @@
 
 Checked 2026-10-12 from the local development environment. These are access and extraction observations, not permission to reuse retailer content.
 
+An additional 2026-10-12 diagnostic from this environment returned HTTP 403 for
+each Zara, H&M and Pull&Bear starting category, both via ordinary `curl` and via
+standard headless Chromium (Playwright). Their `robots.txt` URLs also returned
+HTTP 403 to `curl`. This confirms an environment-specific access failure; it does
+not prove the same result from every network or identify the retailer's exact reason.
+
 | Source | Public starting page | Live result | Next action |
 |---|---|---|---|
 | Reserved | [HU coats](https://www.reserved.com/hu/hu/noi/kabatok), [HU dresses](https://www.reserved.com/hu/hu/noi/ruhak) | Success: ten coats and three dresses, all with HUF prices, raw records, SQLite offers and exports. An earlier repeat run deduplicated one offer. | Manually cross-check a broader sample and verify more categories before widening coverage. |

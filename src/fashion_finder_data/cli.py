@@ -28,7 +28,7 @@ def make_parser() -> argparse.ArgumentParser:
     collect = commands.add_parser("collect", help="Collect a bounded product sample")
     collect.add_argument("source", choices=[*SOURCES, "all"])
     collect.add_argument(
-        "--limit", type=int, default=5, help="Maximum product pages per source (1–100)"
+        "--limit", type=int, default=5, help="Maximum product offers per source (1–100)"
     )
     collect.add_argument(
         "--url", action="append", help="Starting category or product URL; one source only"

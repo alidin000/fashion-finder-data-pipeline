@@ -74,6 +74,22 @@ def test_reserved_category_and_product_extract() -> None:
     assert offer.availability_status == "unknown"
 
 
+def test_numeric_jsonld_price_remains_exact_and_can_be_archived(tmp_path: Path) -> None:
+    data = {
+        "@type": "Product",
+        "sku": "123AB-45C",
+        "name": "Wool coat",
+        "offers": {"price": 129.99, "priceCurrency": "HUF"},
+    }
+    product = response(URL, f'<script type="application/ld+json">{json.dumps(data)}</script>')
+    record = extract_product(product, SOURCES["reserved"])
+    assert normalize(record).price_amount == Decimal("129.99")
+    engine = open_database(tmp_path / "catalog.sqlite")
+    report = ingest_records(engine, tmp_path, "reserved", [record])
+    assert report["records_valid"] == 1
+    assert (tmp_path / "raw" / "reserved" / f"{report['run_id']}.jsonl").exists()
+
+
 def test_hm_category_card_extracts_offer_without_product_page() -> None:
     category = response(
         SOURCES["hm"].category_url,
@@ -93,6 +109,48 @@ def test_hm_category_card_extracts_offer_without_product_page() -> None:
     spider = ProductSpider([SOURCES["hm"]], state, 1)
     assert list(spider.parse_page(category, SOURCES["hm"])) == []
     assert len(state.records["hm"]) == 1
+
+
+def test_limit_is_shared_across_starting_categories_and_skips_duplicates() -> None:
+    source = SOURCES["reserved"]
+    first_url = "https://www.reserved.com/hu/hu/noi/kabatok"
+    second_url = "https://www.reserved.com/hu/hu/noi/ruhak"
+    links = [f"https://www.reserved.com/hu/hu/example-item-{number}ab-45c" for number in range(4)]
+
+    def category(url: str, products: list[str]) -> HtmlResponse:
+        body = "".join(
+            f'<article class="es-product"><a class="es-product-photo" href="{product}"></a></article>'
+            for product in products
+        )
+        return response(url, body)
+
+    state = CrawlState()
+    spider = ProductSpider([source], state, 3, overrides={"reserved": [first_url, second_url]})
+    assert len(list(spider.start_requests())) == 2
+    first = list(spider.parse_page(category(first_url, links[:2]), source))
+    second = list(spider.parse_page(category(second_url, links[1:]), source))
+    assert [request.url for request in first + second] == links[:3]
+    assert state.discovered["reserved"] == 3
+    assert list(spider.parse_page(category(second_url, links[1:]), source)) == []
+
+
+def test_limit_also_bounds_direct_product_start_urls() -> None:
+    source = SOURCES["reserved"]
+    urls = [f"https://www.reserved.com/hu/hu/example-item-{number}ab-45c" for number in range(3)]
+    state = CrawlState()
+    spider = ProductSpider([source], state, 2, overrides={"reserved": urls})
+    assert [request.url for request in spider.start_requests()] == urls[:2]
+    assert state.discovered["reserved"] == 2
+
+
+def test_product_extraction_error_is_preserved() -> None:
+    source = SOURCES["reserved"]
+    state = CrawlState()
+    spider = ProductSpider([source], state, 1)
+    assert list(spider.parse_page(response(URL, "<html></html>"), source)) == []
+    assert state.errors["reserved"] == [
+        "product extraction failed: no Product structured data or product price metadata"
+    ]
 
 
 def test_reserved_category_override_uses_matching_taxonomy() -> None:

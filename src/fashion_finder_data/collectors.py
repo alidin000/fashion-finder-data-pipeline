@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -94,7 +95,9 @@ def allowed_url(source: Source, value: str) -> bool:
     return parts.path.startswith("/hu/") or parts.path.startswith("/hu_hu/")
 
 
-def product_links(response: Response, source: Source, limit: int) -> list[str]:
+def product_links(
+    response: Response, source: Source, limit: int, excluded: set[str] | None = None
+) -> list[str]:
     if source.card_selector:
         candidates = response.css(source.card_selector).getall()
     else:
@@ -107,7 +110,7 @@ def product_links(response: Response, source: Source, limit: int) -> list[str]:
             source.product_pattern, url, re.IGNORECASE
         ):
             continue
-        if url not in seen:
+        if url not in seen and (excluded is None or url not in excluded):
             seen.add(url)
             links.append(url)
         if len(links) >= limit:
@@ -115,7 +118,9 @@ def product_links(response: Response, source: Source, limit: int) -> list[str]:
     return links
 
 
-def extract_hm_cards(response: Response, source: Source, limit: int) -> list[RawProductRecord]:
+def extract_hm_cards(
+    response: Response, source: Source, limit: int, excluded: set[str] | None = None
+) -> list[RawProductRecord]:
     """Read complete H&M offers from public category cards without product requests."""
     records: list[RawProductRecord] = []
     seen: set[str] = set()
@@ -132,6 +137,7 @@ def extract_hm_cards(response: Response, source: Source, limit: int) -> list[Raw
             or not name
             or len(prices) != 1
             or url in seen
+            or (excluded is not None and url in excluded)
         ):
             continue
         image = card.css("img::attr(data-src)").get() or card.css("img::attr(src)").get()
@@ -183,7 +189,7 @@ def extract_product(response: Response, source: Source) -> RawProductRecord:
     node: dict[str, Any] | None = None
     for script in response.css('script[type="application/ld+json"]::text').getall():
         try:
-            node = _product_node(json.loads(script))
+            node = _product_node(json.loads(script, parse_float=Decimal))
         except json.JSONDecodeError:
             continue
         if node:
@@ -265,13 +271,31 @@ class ProductSpider(scrapy.Spider):
         self.limit = limit
         self.overrides = overrides or {}
         self.allowed_domains = [source.host for source in sources]
+        self.scheduled_products: dict[str, set[str]] = {source.key: set() for source in sources}
+
+    def _remaining(self, source_key: str) -> int:
+        return self.limit - len(self.scheduled_products[source_key])
+
+    def _reserve_product(self, source_key: str, url: str) -> bool:
+        scheduled = self.scheduled_products[source_key]
+        if url in scheduled or len(scheduled) >= self.limit:
+            return False
+        scheduled.add(url)
+        self.state.discovered[source_key] = self.state.discovered.get(source_key, 0) + 1
+        return True
 
     def start_requests(self):
         for source in self.sources:
             urls = self.overrides.get(source.key, [source.category_url])
-            for url in urls[: self.limit]:
+            for url in urls:
                 if not allowed_url(source, url):
                     self.state.error(source.key, "input URL is outside the Hungarian storefront")
+                    continue
+                if self._remaining(source.key) == 0:
+                    break
+                if re.search(
+                    source.product_pattern, url, re.IGNORECASE
+                ) and not self._reserve_product(source.key, url):
                     continue
                 yield scrapy.Request(
                     url,
@@ -294,31 +318,52 @@ class ProductSpider(scrapy.Spider):
 
     def parse_page(self, response: Response, source: Source):
         source = source_for_page(source, response.url)
-        if source.key == "hm" and not re.search(
-            source.product_pattern, response.url, re.IGNORECASE
-        ):
-            records = extract_hm_cards(response, source, self.limit)
-            self.state.discovered[source.key] = self.state.discovered.get(source.key, 0) + len(
-                records
+        requested_url = response.request.url if response.request else response.url
+        is_product_url = any(
+            re.search(source.product_pattern, url, re.IGNORECASE)
+            for url in (requested_url, response.url)
+        )
+        if not is_product_url and self._remaining(source.key) == 0:
+            return
+        if source.key == "hm" and not is_product_url:
+            records = extract_hm_cards(
+                response, source, self._remaining(source.key), self.scheduled_products[source.key]
             )
-            self.state.records.setdefault(source.key, []).extend(records)
-            if not records:
+            added = [
+                record
+                for record in records
+                if self._reserve_product(source.key, str(record.product["url"]))
+            ]
+            self.state.records.setdefault(source.key, []).extend(added)
+            if not added and self._remaining(source.key) > 0:
                 self.state.error(source.key, "no complete HUF product cards on category page")
             return
         try:
             record = extract_product(response, source)
-        except ValueError:
+        except (ValueError, TypeError) as exc:
             record = None
+            extraction_error = str(exc)
         if record is not None:
-            self.state.discovered[source.key] = self.state.discovered.get(source.key, 0) + 1
-            self.state.records.setdefault(source.key, []).append(record)
+            if is_product_url or self._reserve_product(source.key, str(record.product["url"])):
+                self.state.records.setdefault(source.key, []).append(record)
             return
-        links = product_links(response, source, self.limit)
-        self.state.discovered[source.key] = self.state.discovered.get(source.key, 0) + len(links)
+        if is_product_url:
+            self.state.error(source.key, f"product extraction failed: {extraction_error}")
+            return
+        if self._remaining(source.key) == 0:
+            return
+        links = product_links(
+            response, source, self._remaining(source.key), self.scheduled_products[source.key]
+        )
         if not links:
-            self.state.error(source.key, "no product records or links found on starting page")
+            self.state.error(
+                source.key,
+                f"no product records or links found on starting page: {extraction_error}",
+            )
             return
         for url in links:
+            if not self._reserve_product(source.key, url):
+                continue
             yield scrapy.Request(
                 url,
                 callback=self.parse_product,

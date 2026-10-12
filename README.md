@@ -39,6 +39,14 @@ See [live Hungarian source status](docs/live-source-status.md) for the latest bo
 - JSONL for raw snapshots and portable exports
 - Pytest for tests
 
+GitHub Actions runs pytest and Ruff on pushes and pull requests. Local checks:
+
+```powershell
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+```
+
 Crawlee was compared on a local fixture and is not a required runtime component.
 The [benchmark and remaining-source decisions](docs/remaining-roadmap-decisions.md) explain why Scrapy remains the default.
 
@@ -65,6 +73,13 @@ fashion-finder export data/exports/catalogue.csv
 ```
 
 `collect all` reports each retailer independently and exits nonzero when any source fails. Use `--url https://...` with a single source to test a specific Hungarian category or product URL. Only HTTPS pages on that retailer's Hungarian storefront are accepted. The CLI never logs in, solves CAPTCHAs, or works around HTTP 403.
+
+To check whether a normal Chromium browser can see one category from your machine,
+run `python scripts/browser_diagnostic.py zara` after installing Chromium with
+`python -m playwright install chromium`. Repeat with `hm` or `pullandbear`.
+It reports the HTTP status and visible product link/price counts without importing
+any records. A browser can render JavaScript, but it cannot guarantee access to
+pages that return HTTP 403. The diagnostic uses no stealth settings.
 
 Reserved recognizes the public `kabatok`, `ruhak`, and `puloverek` category paths as coats, dresses, and sweaters. Other Reserved category overrides retain an unknown category until mapped. The H&M adapter can read complete HUF offers from category cards if the page is accessible, but the live Scrapy check here was blocked before parsing.
 
@@ -121,7 +136,7 @@ database, exports, and run report as web collection. Invalid rows are counted an
 reported; a partial import exits nonzero. This path is ready for supplied feeds,
 but no Zara, H&M, or Pull&Bear feed has been provided or verified.
 
-The first category page only is sampled; pagination and full-catalogue coverage are not implemented. The limit is 1–100 product pages per source, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
+The first category page only is sampled; pagination and full-catalogue coverage are not implemented. The limit is 1–100 product offers per source across all starting URLs, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
 
 ## First success criteria
 
