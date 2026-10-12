@@ -6,13 +6,12 @@ A local-first proof of concept for collecting, normalizing, and comparing fashio
 
 Build a **local product-ingestion pipeline** for Fashion Finder. It should collect small test batches, preserve raw records, normalize them to a common product-offer schema, track price observations, and export a catalogue for the search frontend.
 
-This repository begins as a plan and engineering scaffold. It does **not** yet contain working retailer collectors or a populated product catalogue.
+The first pipeline is implemented. Reserved Hungary passed a one-product live run on 2026-10-12. Zara and Pull&Bear returned pages without usable product data, and H&M returned HTTP 403 in that run. These sources are configured and reported separately, but are **not verified working collectors**. They need an allowed feed, site-compatible extraction, or explicit product URLs that expose structured data; do not use access-control bypasses.
 
 ## Initial source strategy
 
 - **General-purpose tooling:** Scrapy, Playwright for Python, and Crawlee for Python.
-- **Retailer adapters to evaluate:** Zara, H&M, and Reserved, using explicitly licensed community code only where useful.
-- **Pull&Bear:** build an independent adapter with the general-purpose tools; do not copy code from a surfaced repository that has no explicit licence.
+- **Retailer adapters:** Zara, H&M, Reserved, and Pull&Bear. The current collectors use public category/product pages and structured product metadata. No retailer-specific community code is copied.
 - **Optional experiment:** Google Shopping results through a community scraper. Treat results as search candidates, not a complete canonical retailer catalogue.
 
 See [source and licence review](docs/source-review.md) for the repositories and point-in-time findings.
@@ -28,12 +27,13 @@ See [source and licence review](docs/source-review.md) for the repositories and 
 7. Export normalized results and a collection-run report.
 
 See [architecture](docs/architecture.md), [data schema](docs/data-schema.md), and [roadmap](docs/roadmap.md).
+See [live Hungarian source status](docs/live-source-status.md) for the latest bounded check.
 
 ## Initial stack
 
 - Python 3.12
-- Scrapy
-- Playwright for Python (only when browser rendering is needed)
+- Scrapy (robots-aware HTTP collection)
+- Playwright for Python (optional investigation of rendered pages; the current pipeline does not rely on a browser)
 - Pydantic for schema validation
 - SQLAlchemy + SQLite for local persistence
 - JSONL for raw snapshots and portable exports
@@ -48,10 +48,31 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
+# Optional: only for browser-rendering investigation
 python -m playwright install chromium
 ```
 
-At this stage, the CLI is a placeholder. No retailer data is collected until an adapter is implemented and explicitly invoked.
+From the repository root, try one bounded Reserved sample:
+
+```powershell
+fashion-finder sources list
+fashion-finder collect reserved --limit 1
+fashion-finder collect all --limit 1
+fashion-finder report <run-id>
+fashion-finder export data/exports/catalogue.csv
+```
+
+`collect all` reports each retailer independently and exits nonzero when any source fails. Use `--url https://...` with a single source to test a specific Hungarian category or product URL. Only HTTPS pages on that retailer's Hungarian storefront are accepted. The CLI never logs in, solves CAPTCHAs, or works around HTTP 403.
+
+Every collection writes raw JSONL under `data/raw/<source>/`, a run report under `data/reports/`, offers and price changes in `data/fashion_finder.sqlite`, and refreshed JSONL/CSV exports under `data/exports/`. These local outputs are ignored by Git. Repeat runs update an offer and add a price observation only when its price or currency changes.
+
+To replay a raw file without network access:
+
+```powershell
+fashion-finder ingest reserved data/raw/reserved/<run-id>.jsonl
+```
+
+The first category page only is sampled; pagination and full-catalogue coverage are not implemented. The limit is 1–100 product pages per source, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
 
 ## First success criteria
 

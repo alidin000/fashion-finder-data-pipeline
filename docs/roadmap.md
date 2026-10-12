@@ -3,38 +3,37 @@
 ## Phase 0 — Repository and local environment
 - [x] Document initial architecture and candidate sources.
 - [x] Record point-in-time code licence findings.
-- [ ] Create Python package and local development environment.
+- [x] Create Python package and local development environment.
 - [ ] Add .env.example only if configuration secrets become necessary; never commit real tokens.
 
 ## Phase 1 — Data contract and fixtures
-- [ ] Define RawProductRecord, RetailerOffer and CollectionRun schemas.
-- [ ] Add small, non-sensitive fixture records.
-- [ ] Normalize price, currency, category, colour and size fields.
-- [ ] Test missing prices, decimal/comma formats, malformed URLs and unknown availability.
-- [ ] Implement JSONL input/output helpers.
+- [x] Define RawProductRecord, RetailerOffer and CollectionRun schemas.
+- [x] Add small, non-sensitive synthetic test records.
+- [x] Normalize price, currency, category, colour and size fields when supplied.
+- [x] Test missing prices, decimal/comma formats, malformed URLs and unknown availability.
+- [x] Implement JSONL input/output helpers.
 
 ## Phase 2 — Local persistence
-- [ ] Create SQLite tables for retailers, offers, price observations and collection runs.
-- [ ] Implement idempotent upsert keyed by retailer + source product ID; fall back to canonical URL.
-- [ ] Insert a price observation when the observed price/currency changes.
-- [ ] Add JSONL and CSV exports.
-- [ ] Generate a run report with field completeness.
+- [x] Create SQLite tables for retailers, offers, price observations and collection runs.
+- [x] Implement idempotent upsert keyed by retailer + source product ID; fall back to canonical URL.
+- [x] Insert a price observation when the observed price/currency changes.
+- [x] Add JSONL and CSV exports.
+- [x] Generate a run report with field completeness.
 
 ## Phase 3 — First retailer adapter
-- [ ] Inspect and test the Zara community code in isolation.
-- [ ] Save a small raw-response fixture.
-- [ ] Update obsolete dependencies or port extraction logic to Scrapy.
-- [ ] Run a small bounded sample and manually verify at least 10 results.
-- [ ] Record unsupported fields rather than guessing.
+- [x] Implement and live-check a bounded Reserved Hungary adapter.
+- [x] Preserve a raw JSONL record, store one offer, and verify its price and URL.
+- [ ] Manually verify at least 10 results across categories.
+- [x] Record unsupported fields as unknown rather than guessing.
 
-## Phase 4 — H&M and Reserved
-- [ ] Adapt H&M parsing with an explicit source-market setting.
-- [ ] Inspect Reserved repository source files and validate current page structure.
-- [ ] Make each collector independently runnable.
-- [ ] Ensure one adapter failure does not terminate the whole pipeline.
+## Phase 4 — Zara, H&M and Pull&Bear
+- [ ] Obtain allowed access or feeds for the three currently blocked/unparseable storefronts.
+- [ ] Verify source-specific extraction on small Hungarian samples.
+- [x] Make each configured collector independently runnable.
+- [x] Ensure one adapter failure does not terminate the whole pipeline.
 
-## Phase 5 — Pull&Bear and optional source
-- [ ] Implement a clean-room Pull&Bear adapter; do not copy the unlicensed repository.
+## Phase 5 — Additional sources and coverage
+- [ ] Finish a clean-room Pull&Bear adapter when a usable, allowed data source is available; do not copy the unlicensed repository.
 - [ ] Evaluate Google Shopping scraping only as an optional discovery source.
 - [ ] Benchmark Crawlee against Scrapy on maintainability, extraction success and runtime.
 

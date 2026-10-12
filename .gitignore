@@ -14,6 +14,7 @@ build/
 !.env.example
 data/raw/**
 data/exports/**
+data/reports/**
 data/*.sqlite
 data/*.db
 playwright-report/

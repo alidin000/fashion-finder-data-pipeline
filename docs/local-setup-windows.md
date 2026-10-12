@@ -13,23 +13,24 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
+# Optional: only if investigating a page that needs browser rendering
 python -m playwright install chromium
 ```
 
 If PowerShell blocks activation, invoke the virtual environment's Python directly rather than changing the machine-wide execution policy.
 
-## Planned commands
-
-The intended interface (not implemented yet):
+## Commands
 
 ```powershell
 fashion-finder sources list
-fashion-finder collect zara --market HU --category jackets --limit 25
-fashion-finder normalize data/raw/zara/<run-id>.jsonl
+fashion-finder collect reserved --limit 1
+fashion-finder collect all --limit 1
+fashion-finder ingest reserved data/raw/reserved/<run-id>.jsonl
 fashion-finder report <run-id>
+fashion-finder export data/exports/catalogue.csv
 ```
 
-Do not run these commands until the corresponding CLI and collectors are implemented.
+The command currently targets Hungarian storefronts only. A failed source is recorded in its own report.
 
 ## Local outputs
 - data/raw/ — ignored by Git; raw collection runs

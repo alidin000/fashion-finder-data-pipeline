@@ -1,12 +1,5 @@
 # Tests
 
-Add fixture-based tests before running live collectors.
+Run `pytest` from the repository root. `test_pipeline.py` uses synthetic HTML and records to cover parsing, validation, repeat-run upserts, price changes, missing prices and isolated source failures.
 
-Initial planned tests:
-- price parsing and currency normalization
-- product URL validation
-- missing/unknown field handling
-- source ID/URL deduplication
-- idempotent offer upsert
-- price-observation insertion when price changes
-- collection-run reporting
+Live source checks are separate from unit tests and must use a small `--limit`.
