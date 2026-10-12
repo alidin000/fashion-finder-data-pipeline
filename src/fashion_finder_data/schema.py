@@ -35,6 +35,27 @@ def canonical_url(value: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
+def is_hungarian_source_url(source_key: str, value: str) -> bool:
+    """Confirm that a public product link stays on its Hungarian retailer host."""
+    expected = {
+        "zara": "zara.com",
+        "hm": "hm.com",
+        "reserved": "reserved.com",
+        "pullandbear": "pullandbear.com",
+    }.get(source_key)
+    if expected is None:
+        return False
+    parts = urlsplit(value)
+    host = parts.hostname or ""
+    return (
+        parts.scheme.lower() == "https"
+        and not parts.username
+        and not parts.password
+        and (host == expected or host.endswith("." + expected))
+        and parts.path.startswith(("/hu/", "/hu_hu/"))
+    )
+
+
 def parse_money(value: Any, currency: str | None = None) -> Decimal | None:
     if value is None or value == "":
         return None
@@ -130,18 +151,10 @@ def normalize(raw: RawProductRecord) -> RetailerOffer:
     data = raw.product
     source_url = str(data.get("url") or raw.source_url).strip()
     canonical = canonical_url(source_url)
-    expected_host = {
-        "zara": "zara.com",
-        "hm": "hm.com",
-        "reserved": "reserved.com",
-        "pullandbear": "pullandbear.com",
-    }[raw.source_key]
     host = urlsplit(source_url).hostname or ""
     source_host = urlsplit(raw.source_url).hostname or ""
-    if host != source_host or not (host == expected_host or host.endswith("." + expected_host)):
-        raise ValueError("product URL host does not match the retailer")
-    if not urlsplit(source_url).path.startswith(("/hu/", "/hu_hu/")):
-        raise ValueError("product URL is outside the Hungarian storefront")
+    if host != source_host or not is_hungarian_source_url(raw.source_key, source_url):
+        raise ValueError("product URL is outside the retailer's Hungarian storefront")
     currency = str(data["currency"]).strip().upper() if data.get("currency") else None
     price = parse_money(data.get("price"), currency)
     original_price = parse_money(data.get("original_price"), currency)

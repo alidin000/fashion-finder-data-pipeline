@@ -2,6 +2,8 @@
 
 Status: implementation plan, 12 October 2026. This expands the [data pipeline roadmap](roadmap.md) into a Hungary-first shopper application. The roadmap describes ingestion work; this document defines the product, service, and release work that sits on top of it.
 
+Track completed work and release blockers in [application progress](application-progress.md).
+
 ## 1. Target outcome and scope
 
 A shopper submits a clothing photo or a text query, corrects the inferred category or colour, sets a budget, and opens a current Hungarian retailer offer. The result page must distinguish a verified identical item from a visually similar alternative. It must show the retailer, HUF price, direct product link, and when the offer was last checked. Show size, stock, shipping, or pickup claims only when the source actually supplies and permits those fields.

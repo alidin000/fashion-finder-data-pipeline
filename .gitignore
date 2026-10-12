@@ -17,8 +17,12 @@ data/exports/**
 data/reports/**
 data/*.sqlite
 data/*.db
+data/source-policies*.json
 playwright-report/
 test-results/
 storage/
 .DS_Store
 Thumbs.db
+web/node_modules/
+web/.next/
+web/*.tsbuildinfo

@@ -28,6 +28,8 @@ See [source and licence review](docs/source-review.md) for the repositories and 
 
 See [architecture](docs/architecture.md), [data schema](docs/data-schema.md), and [roadmap](docs/roadmap.md).
 See [live Hungarian source status](docs/live-source-status.md) for the latest bounded check.
+The [application implementation plan](docs/application-implementation-plan.md) and [local app setup](docs/app-local-setup.md) cover the read-only API and shopper web app. Public results require an explicit approved source policy; without one, the API returns an empty catalogue.
+See [application progress](docs/application-progress.md) for implemented pieces and beta blockers.
 
 ## Initial stack
 
@@ -39,7 +41,7 @@ See [live Hungarian source status](docs/live-source-status.md) for the latest bo
 - JSONL for raw snapshots and portable exports
 - Pytest for tests
 
-GitHub Actions runs pytest and Ruff on pushes and pull requests. Local checks:
+GitHub Actions runs pytest, Ruff, and the web checks on pushes and pull requests. Local Python checks:
 
 ```powershell
 python -m pytest
