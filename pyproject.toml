@@ -23,7 +23,7 @@ dev = [
   "ruff>=0.5",
 ]
 crawlee-benchmark = [
-  "crawlee[playwright]>=0.5",
+  "crawlee[parsel]>=1.10,<2",
 ]
 
 [project.scripts]

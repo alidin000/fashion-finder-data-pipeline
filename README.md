@@ -39,7 +39,8 @@ See [live Hungarian source status](docs/live-source-status.md) for the latest bo
 - JSONL for raw snapshots and portable exports
 - Pytest for tests
 
-Crawlee is a comparison candidate, not another required runtime component. Benchmark it against Scrapy before deciding to adopt it.
+Crawlee was compared on a local fixture and is not a required runtime component.
+The [benchmark and remaining-source decisions](docs/remaining-roadmap-decisions.md) explain why Scrapy remains the default.
 
 ## Windows quick start
 
@@ -88,6 +89,16 @@ fashion-finder quality --output data/reports/quality-check.json
 ```
 
 The report counts old observations, missing fields, unmapped categories, malformed stored values, and unknown availability. It does not contact retailers or change offer status. An old observation means the listing needs another check; it does not prove the item was removed or sold out. `--output` creates a new JSON file and refuses to overwrite an existing one.
+
+List offers that need a direct check:
+
+```powershell
+fashion-finder recheck --source reserved --stale-after-days 7 --limit 20
+```
+
+This command is read-only. It includes a direct URL only when the stored URL still passes
+the retailer and Hungarian-market checks. Missing items in a bounded sample and HTTP
+errors do not mark offers unavailable. See the [source-specific removal policy](docs/remaining-roadmap-decisions.md#removal-and-stock-policy).
 
 To replay a raw file without network access:
 

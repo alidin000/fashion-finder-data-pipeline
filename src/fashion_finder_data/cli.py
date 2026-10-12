@@ -12,6 +12,7 @@ from .collectors import SOURCES, crawl
 from .feed import import_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
+from .removal import recheck_report
 from .schema import utc_now
 from .search import search_catalogue
 from .storage import export_catalogue, load_run, open_database
@@ -56,6 +57,10 @@ def make_parser() -> argparse.ArgumentParser:
     quality = commands.add_parser("quality", help="Report local offer freshness and completeness")
     quality.add_argument("--stale-after-days", type=int, default=7)
     quality.add_argument("--output", type=Path, help="Create a JSON report file")
+    recheck = commands.add_parser("recheck", help="List offers needing direct source review")
+    recheck.add_argument("--source", choices=SOURCES)
+    recheck.add_argument("--stale-after-days", type=int, default=7)
+    recheck.add_argument("--limit", type=int, default=100)
     return parser
 
 
@@ -146,6 +151,18 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
         print(body, end="")
+        return 0
+    if args.command == "recheck":
+        try:
+            result = recheck_report(
+                engine,
+                source_key=args.source,
+                stale_after_days=args.stale_after_days,
+                limit=args.limit,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     return 2
 

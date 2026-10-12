@@ -19,5 +19,6 @@ data/*.sqlite
 data/*.db
 playwright-report/
 test-results/
+storage/
 .DS_Store
 Thumbs.db

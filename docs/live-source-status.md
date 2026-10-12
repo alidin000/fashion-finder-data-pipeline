@@ -15,6 +15,8 @@ The current collector samples the first category page and product pages only. It
 
 An `import-feed` command can ingest a local, authorized product CSV for any of the four sources. It has no feed credentials or live feed integration. A successful feed import does not establish that the corresponding web collector works.
 
+The read-only `recheck` command now lists stale offers for direct review. The [source-specific removal policy](remaining-roadmap-decisions.md#removal-and-stock-policy) does not turn missing sample results or blocked requests into unavailable stock.
+
 On 2026-10-12, ten stored Reserved offers were cross-checked against fresh public product-page responses: seven coats (`144KY-74X`, `144KY-99X`, `050HW-99X`, `038HW-99X`, `158KY-02M`, `158KY-99X`, `966HU-02M`) and three dresses (`504KE-83X`, `519KE-83X`, `519KE-99X`). All ten returned HTTP 200 and matched their stored product path, SKU, title, HUF currency, and price in page metadata. This checks the sampled listings at that time; it does not confirm stock or image reuse rights.
 
 A local quality report over those 13 live-collected offers found zero stale records, missing prices, missing images, or malformed URLs. All 13 still have unknown availability, as the pages did not provide a verified stock state.
