@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit
 
+USER_AGENT = "FashionFinderResearch/0.1 (+local bounded collection)"
+
 SourceKey = Literal[
     "zara",
     "hm",

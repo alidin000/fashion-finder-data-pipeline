@@ -1,15 +1,35 @@
 # Local product-image index experiment
 
 This is the next step after the five-image synthetic demo. It indexes **local
-files that an operator has already obtained with permission** for a current
-Hungarian product feed. The command never downloads images or accepts a user
-image URL. The API reads the finished index; shopper requests never rebuild it.
+files** for current Hungarian offers. `index-images` never downloads images or
+accepts a user image URL; `fetch-images` (below) is the separate download step.
+The API reads the finished index; shopper requests never rebuild it.
 
-The default feature is a coarse colour and layout descriptor. A pinned,
-optional ViT image encoder provides a stronger visual representation for local
-evaluation. Neither encoder is trained specifically for fashion, establishes
-an exact product match, or satisfies the
+The default feature is a coarse colour and layout descriptor. Two pinned,
+optional ONNX encoders give stronger results: Marqo-FashionSigLIP, which is
+trained on fashion products and is the recommended choice, and a general
+ImageNet ViT. None of them establishes an exact product match or satisfies the
 [private-beta gate](release-gate-handoff.md) without real evidence.
+
+An index holds up to 20,000 photos. Indexes built before embeddings were stored
+as compact float32 (index version 2) must be rebuilt once.
+
+## Download photos with fetch-images
+
+`fetch-images` downloads up to `--per-offer` photos (default 2, usually front and
+back) for each stored active offer, then writes `data/images/manifest.json` in the
+format `index-images` expects. It only accepts HTTPS photos on the retailer's own
+domains, such as `static.sinsay.com`, and follows each image host's `robots.txt`.
+It waits `--delay` seconds (default 2) between requests. A rerun reuses files it
+already has, and drops manifest entries whose offer or photo URL is gone.
+
+```bash
+.venv/bin/fashion-finder --data-dir data collect sinsay --limit 500
+.venv/bin/fashion-finder --data-dir data fetch-images --source sinsay --limit 500
+```
+
+Collect shortly before indexing: the indexer rejects offers older than the
+source policy's `freshness_hours` (default 72).
 
 ## Prepare the files
 
@@ -67,6 +87,37 @@ the API still checks current offer freshness, source policy, policy version,
 and image URL. A revoked policy or changed URL removes that result immediately.
 Setting the experiment flag to `0` makes the regular photo route return 503.
 The bundled demo uses a separate database and index.
+
+## Recommended: Marqo-FashionSigLIP encoder
+
+[Marqo-FashionSigLIP](https://huggingface.co/Marqo/marqo-fashionSigLIP) (Apache-2.0)
+is fine-tuned from SigLIP on fashion products; the ViT below is a general
+ImageNet model. Marqo's own benchmarks show it ahead of FashionCLIP; it has not
+been measured on this catalogue yet. The encoder uses its ONNX vision tower at
+revision `c56244cc94f92419e8369fa71efdaf403b124ce8`. Pick one file; INT8 is about
+4x smaller and faster, and usually slightly less accurate:
+
+| File | Size | SHA-256 |
+|---|---|---|
+| `onnx/vision_model.onnx` | 371.7 MB | `a7e773846b27a699c45ba7e3978514b7fca420662d7e69e3b9226982f09f4a13` |
+| `onnx/vision_model_quantized.onnx` | 94.0 MB | `f1009cfce0eedd409f601e8351eedab72e8529641105eee6517821a9a634a2f4` |
+
+```bash
+mkdir -p data/models
+curl -fL -o data/models/fashion-siglip-vision.onnx \
+  https://huggingface.co/Marqo/marqo-fashionSigLIP/resolve/c56244cc94f92419e8369fa71efdaf403b124ce8/onnx/vision_model.onnx
+sha256sum data/models/fashion-siglip-vision.onnx
+.venv/bin/python -m pip install -e '.[dev,image-model]'
+.venv/bin/fashion-finder --data-dir data index-images \
+  data/images/manifest.json --policy data/source-policies.json \
+  --model-path data/models/fashion-siglip-vision.onnx
+```
+
+The encoder recognises the file by its size and checks the digest. It squashes
+each photo to 224×224 (bicubic) and scales pixels to [-1, 1], which is the
+preprocessing Marqo publishes for this model, then L2-normalises `image_embeds`.
+Point the API at the same file with `FASHION_FINDER_IMAGE_MODEL_PATH`, as in the
+Docker settings below.
 
 ## Optional pretrained ViT encoder
 

@@ -18,6 +18,7 @@ from .schema import RawProductRecord, parse_money, utc_now
 from .sources import (
     CRAWL_SOURCES,
     SOURCES,  # noqa: F401 - compatibility for existing callers
+    USER_AGENT,
     Source,
     allowed_url,
 )
@@ -548,7 +549,7 @@ def crawl(
     state = CrawlState()
     settings: dict[str, Any] = {
         "BOT_NAME": "fashion_finder_data",
-        "USER_AGENT": "FashionFinderResearch/0.1 (+local bounded collection)",
+        "USER_AGENT": USER_AGENT,
         "ROBOTSTXT_OBEY": True,
         "DOWNLOAD_DELAY": 10,
         "DOWNLOAD_DELAY_JITTER": 0,

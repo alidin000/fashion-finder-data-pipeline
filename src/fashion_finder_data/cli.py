@@ -14,6 +14,7 @@ from .collectors import MAX_LIMIT, crawl
 from .evaluation import evaluate_tasks
 from .feed import import_feed, validate_feed
 from .feed_mapping import map_xml_feed
+from .image_fetch import fetch_images
 from .image_index import build_image_index
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
@@ -153,6 +154,18 @@ def make_parser() -> argparse.ArgumentParser:
     )
     images.add_argument(
         "--model-path", type=Path, default=Path(model_default) if model_default else None
+    )
+    fetch = commands.add_parser(
+        "fetch-images", help="Download product photos of stored offers for index-images"
+    )
+    fetch.add_argument("--source", choices=[key for key in SOURCES if key != "demo"])
+    fetch.add_argument("--limit", type=int, default=100, help="Maximum offers (1–20000)")
+    fetch.add_argument("--per-offer", type=int, default=2, help="Photos per offer (1–8)")
+    fetch.add_argument(
+        "--delay", type=float, default=2.0, help="Seconds between requests (0.5–60; default 2)"
+    )
+    fetch.add_argument(
+        "--output-dir", type=Path, help="Photo and manifest folder (default: <data-dir>/images)"
     )
     metrics = commands.add_parser("analytics-report", help="Show anonymous daily event totals")
     metrics.add_argument("--days", type=int, default=7)
@@ -304,6 +317,20 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "fetch-images":
+        try:
+            result = fetch_images(
+                engine,
+                args.output_dir or args.data_dir / "images",
+                source=args.source,
+                limit=args.limit,
+                per_offer=args.per_offer,
+                delay=args.delay,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] != "failed" else 1
     if args.command in {
         "readiness",
         "audit-sample",

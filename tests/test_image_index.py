@@ -186,6 +186,6 @@ def test_model_change_cannot_reuse_an_incompatible_image_index(tmp_path):
 
     wrong_model = tmp_path / "wrong.onnx"
     wrong_model.write_bytes(b"not the pinned image model")
-    with pytest.raises(ValueError, match="pinned ViT artifact"):
+    with pytest.raises(ValueError, match="pinned image model"):
         build_image_index(database, policies, manifest_path, model_path=wrong_model)
     assert hashlib.sha256(target.read_bytes()).hexdigest() == initial_hash

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import math
+import sys
+from array import array
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -17,11 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from .public_catalogue import _public_offer, _safe_image_url, _visible
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
+from .text_match import matches_colour, matches_size
 from .visual_encoder import ImageEncoder, get_encoder
 
 INDEX_FILE = "product-image-index.json"
-INDEX_VERSION = 1
-MAX_ENTRIES = 500
+# Version 2 stores each embedding as base64 little-endian float32, not a JSON list.
+INDEX_VERSION = 2
+MAX_ENTRIES = 20_000
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 
@@ -34,6 +41,21 @@ class ImageManifestEntry(BaseModel):
     offer_id: int = Field(gt=0)
     image_url: str = Field(min_length=1, max_length=2048)
     image_path: str = Field(min_length=1, max_length=500)
+
+
+def pack_features(values: list[float]) -> str:
+    data = array("f", values)
+    if sys.byteorder == "big":
+        data.byteswap()
+    return base64.b64encode(data.tobytes()).decode("ascii")
+
+
+def unpack_features(text: str) -> array:
+    data = array("f")
+    data.frombytes(base64.b64decode(text, validate=True))
+    if sys.byteorder == "big":
+        data.byteswap()
+    return data
 
 
 def _read_image(path: Path, encoder: ImageEncoder) -> tuple[bytes, list[float]]:
@@ -103,7 +125,7 @@ def build_image_index(
                 "image_url": entry.image_url,
                 "policy_version": policy.policy_version,
                 "sha256": hashlib.sha256(data).hexdigest(),
-                "features": features,
+                "features": pack_features(features),
             }
         )
     destination = database.path.parent / INDEX_FILE
@@ -125,35 +147,67 @@ def build_image_index(
     }
 
 
-def _load_index(database: Database, encoder: ImageEncoder) -> list[dict[str, Any]]:
-    try:
-        index = json.loads((database.path.parent / INDEX_FILE).read_text(encoding="utf-8"))
-        entries = index["entries"]
+@lru_cache(maxsize=2)
+def _read_index(
+    path: str, inode: int, size: int, modified_ns: int, feature_version: str, length: int
+) -> tuple[dict[str, Any], ...]:
+    """Parse and validate once per index file; a rebuild changes the cache key."""
+    index = json.loads(Path(path).read_text(encoding="utf-8"))
+    entries = index["entries"]
+    if (
+        index["version"] != INDEX_VERSION
+        or index["feature_version"] != feature_version
+        or not isinstance(entries, list)
+        or not 1 <= len(entries) <= MAX_ENTRIES
+    ):
+        raise ValueError("image index is incompatible")
+    for entry in entries:
         if (
-            index["version"] != INDEX_VERSION
-            or index["feature_version"] != encoder.version
-            or not isinstance(entries, list)
-            or not 1 <= len(entries) <= MAX_ENTRIES
+            not isinstance(entry["offer_id"], int)
+            or not isinstance(entry["image_url"], str)
+            or not isinstance(entry["source_key"], str)
+            or not isinstance(entry["policy_version"], str)
+            or not isinstance(entry["features"], str)
         ):
-            raise ValueError("image index is incompatible")
-        for entry in entries:
-            values = entry["features"]
-            if (
-                not isinstance(entry["offer_id"], int)
-                or not isinstance(entry["image_url"], str)
-                or not isinstance(entry["source_key"], str)
-                or not isinstance(entry["policy_version"], str)
-                or not isinstance(values, list)
-                or len(values) != encoder.length
-                or any(
-                    not isinstance(value, (int, float)) or not math.isfinite(value)
-                    for value in values
-                )
-            ):
-                raise ValueError("image index contains invalid entries")
-        return entries
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise TypeError("image index contains invalid entries")
+        values = unpack_features(entry["features"])
+        if len(values) != length or not all(math.isfinite(value) for value in values):
+            raise ValueError("image index contains invalid entries")
+        entry["features"] = values
+    return tuple(entries)
+
+
+def _load_index(database: Database, encoder: ImageEncoder) -> tuple[dict[str, Any], ...]:
+    path = database.path.parent / INDEX_FILE
+    try:
+        stat = path.stat()
+        return _read_index(
+            str(path),
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            encoder.version,
+            encoder.length,
+        )
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, binascii.Error) as exc:
         raise ValueError("image index is unavailable or invalid") from exc
+
+
+def _distances(
+    encoder: ImageEncoder, query: list[float], entries: list[dict[str, Any]]
+) -> list[float]:
+    """Cosine models rank with one matrix product when NumPy is installed."""
+    if encoder.cosine and entries:
+        try:
+            import numpy as np
+        except ImportError:
+            pass
+        else:
+            matrix = np.frombuffer(
+                b"".join(entry["features"].tobytes() for entry in entries), dtype=np.float32
+            ).reshape(len(entries), encoder.length)
+            return (1.0 - matrix @ np.asarray(query, dtype=np.float32)).tolist()
+    return [encoder.distance(query, entry["features"]) for entry in entries]
 
 
 def _eligible(
@@ -192,11 +246,9 @@ def _eligible(
             continue
         if category and offer["category"] != category:
             continue
-        if colour and not any(
-            colour.casefold() == name.casefold() for name in offer["colour_names"]
-        ):
+        if colour and not matches_colour(colour, offer["colour_names"]):
             continue
-        if size and not any(size.casefold() == value.casefold() for value in offer["size_options"]):
+        if size and not matches_size(size, offer["size_options"]):
             continue
         if max_price is not None and Decimal(offer["price_amount"]) > max_price:
             continue
@@ -240,13 +292,10 @@ def search_indexed_image(
         size=size,
         max_price=max_price,
     )
+    distances = _distances(encoder, query, [entry for entry, _ in candidates])
     ranked = sorted(
-        (
-            encoder.distance(query, entry["features"]),
-            offer["id"],
-            offer,
-        )
-        for entry, offer in candidates
+        (distance, offer["id"], offer)
+        for distance, (_, offer) in zip(distances, candidates, strict=True)
     )
     seen = set()
     items = []
