@@ -15,7 +15,7 @@ from .evaluation import evaluate_tasks
 from .feed import import_feed, validate_feed
 from .feed_mapping import map_xml_feed
 from .image_fetch import fetch_images
-from .image_index import build_image_index
+from .image_index import build_image_index, search_indexed_text
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
 from .ranking_evaluation import evaluate_rankings
@@ -141,10 +141,38 @@ def make_parser() -> argparse.ArgumentParser:
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
     model_default = os.environ.get("FASHION_FINDER_IMAGE_MODEL_PATH")
-    rankings.add_argument(
-        "--model-path", type=Path, default=Path(model_default) if model_default else None
-    )
+    text_default = os.environ.get("FASHION_FINDER_TEXT_MODEL_PATH")
+    tokenizer_default = os.environ.get("FASHION_FINDER_TOKENIZER_PATH")
+
+    def add_model_paths(command: argparse.ArgumentParser, *, text: bool) -> None:
+        command.add_argument(
+            "--model-path", type=Path, default=Path(model_default) if model_default else None
+        )
+        if text:
+            command.add_argument(
+                "--text-model-path",
+                type=Path,
+                default=Path(text_default) if text_default else None,
+            )
+            command.add_argument(
+                "--tokenizer-path",
+                type=Path,
+                default=Path(tokenizer_default) if tokenizer_default else None,
+            )
+
+    add_model_paths(rankings, text=True)
     rankings.add_argument("--output", type=Path, help="Create a JSON report file")
+    look = commands.add_parser(
+        "search-look", help="Find indexed product photos that match a description"
+    )
+    look.add_argument("query")
+    look.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    add_model_paths(look, text=True)
+    for option in ("--category", "--colour", "--size", "--source"):
+        look.add_argument(option)
+    look.add_argument("--max-price", type=Decimal)
     images = commands.add_parser(
         "index-images", help="Build a local image-search experiment from permitted files"
     )
@@ -152,9 +180,7 @@ def make_parser() -> argparse.ArgumentParser:
     images.add_argument(
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
-    images.add_argument(
-        "--model-path", type=Path, default=Path(model_default) if model_default else None
-    )
+    add_model_paths(images, text=False)
     fetch = commands.add_parser(
         "fetch-images", help="Download product photos of stored offers for index-images"
     )
@@ -317,6 +343,27 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "search-look":
+        try:
+            if args.policy is None:
+                raise ValueError("--policy is required for text-to-photo search")
+            result = search_indexed_text(
+                engine,
+                load_policies(args.policy),
+                args.query,
+                category=args.category,
+                colour=args.colour,
+                size=args.size,
+                source=args.source,
+                max_price=args.max_price,
+                model_path=args.model_path,
+                text_model_path=args.text_model_path,
+                tokenizer_path=args.tokenizer_path,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "fetch-images":
         try:
             result = fetch_images(
@@ -361,7 +408,13 @@ def main(argv: list[str] | None = None) -> int:
                     result = evaluate_tasks(engine, policies, args.category, args.path)
                 else:
                     result = evaluate_rankings(
-                        engine, policies, args.category, args.path, model_path=args.model_path
+                        engine,
+                        policies,
+                        args.category,
+                        args.path,
+                        model_path=args.model_path,
+                        text_model_path=args.text_model_path,
+                        tokenizer_path=args.tokenizer_path,
                     )
                 body = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
                 if args.output:

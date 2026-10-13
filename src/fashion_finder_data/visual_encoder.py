@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import math
+import string
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -23,12 +25,15 @@ VIT_FEATURE_LENGTH = 768
 # Marqo-FashionSigLIP vision tower (Apache-2.0), ONNX export in the model repository.
 # Sizes and SHA-256 values come from the Hugging Face file listing at this revision.
 FASHION_SIGLIP_REVISION = "c56244cc94f92419e8369fa71efdaf403b124ce8"
+# Image and text embeddings are comparable only within one embedding space.
+FASHION_SIGLIP_SPACE = "marqo-fashion-siglip"
 
 
 class ImageEncoder(Protocol):
     version: str
     length: int
     cosine: bool
+    space: str
 
     def encode(self, image: Image.Image) -> list[float]: ...
 
@@ -39,6 +44,7 @@ class ColourLayoutEncoder:
     version = FEATURE_VERSION
     length = FEATURE_LENGTH
     cosine = False
+    space = FEATURE_VERSION
 
     def encode(self, image: Image.Image) -> list[float]:
         return image_features(image)
@@ -56,6 +62,7 @@ class OnnxArtifact:
     size: int
     output: str
     first_token: bool  # True: the output is a token sequence; use token 0 (CLS)
+    space: str
     length: int = 768
 
 
@@ -65,6 +72,7 @@ VIT = OnnxArtifact(
     size=VIT_MODEL_BYTES,
     output="last_hidden_state",
     first_token=True,
+    space="vit-base-patch32-224-in21k",
 )
 FASHION_SIGLIP = OnnxArtifact(
     version=(
@@ -75,6 +83,7 @@ FASHION_SIGLIP = OnnxArtifact(
     size=371_715_502,
     output="image_embeds",
     first_token=False,
+    space=FASHION_SIGLIP_SPACE,
 )
 FASHION_SIGLIP_INT8 = OnnxArtifact(
     version=(
@@ -85,6 +94,7 @@ FASHION_SIGLIP_INT8 = OnnxArtifact(
     size=93_973_443,
     output="image_embeds",
     first_token=False,
+    space=FASHION_SIGLIP_SPACE,
 )
 ARTIFACTS = {artifact.size: artifact for artifact in (VIT, FASHION_SIGLIP, FASHION_SIGLIP_INT8)}
 
@@ -128,6 +138,7 @@ class OnnxImageEncoder:
         self.artifact = artifact
         self.version = artifact.version
         self.length = artifact.length
+        self.space = artifact.space
         self._np = np
         self._session = session
 
@@ -172,3 +183,104 @@ def get_encoder(model_path: Path | None = None) -> ImageEncoder:
     if not path.is_file():
         raise ValueError("image model path must be a file")
     return _cached_model(str(path), stat.st_size, stat.st_mtime_ns)
+
+
+# Marqo-FashionSigLIP text tower and tokenizer at FASHION_SIGLIP_REVISION. The text
+# model files are LFS objects (listed digests); tokenizer.json is a plain git file,
+# hashed after download from that revision.
+TEXT_ARTIFACTS = {
+    441_361_402: "c1d501b23bddf27ba828c037b0780e44fdf47ca4c0b925ef190ab5bcf7aaf6e6",  # fp32
+    111_125_229: "f5a7995e029c6ee9346fa46857661c4a171d28b164fa7703b85a527d73adf170",  # int8
+}
+TOKENIZER_BYTES = 2_421_300
+TOKENIZER_SHA256 = "5bc9b16db0e7adf5c9a2bd57f8f9c8e6ebdaabe75679cc956d007f78036d5b4a"
+TEXT_CONTEXT_LENGTH = 64
+_PUNCTUATION = str.maketrans("", "", string.punctuation)
+
+
+def canonical_text(text: str) -> str:
+    """open_clip's ``canonicalize`` clean, which this model was trained with."""
+    text = html.unescape(html.unescape(text)).strip().replace("_", " ")
+    return " ".join(text.translate(_PUNCTUATION).lower().split())
+
+
+def _check_pinned(path: Path, size_to_digest: dict[int, str], label: str) -> None:
+    digest = size_to_digest.get(path.stat().st_size)
+    if digest is not None:
+        with path.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() == digest:
+                return
+    raise ValueError(f"{label} does not match a pinned Marqo-FashionSigLIP file")
+
+
+class OnnxTextEncoder:
+    """Embed a shopper's words into the same space as FashionSigLIP photo embeddings."""
+
+    space = FASHION_SIGLIP_SPACE
+    length = 768
+
+    def __init__(self, model_path: Path, tokenizer_path: Path):
+        _check_pinned(model_path, TEXT_ARTIFACTS, "text model")
+        _check_pinned(tokenizer_path, {TOKENIZER_BYTES: TOKENIZER_SHA256}, "tokenizer")
+        try:
+            import numpy as np
+            import onnxruntime as ort
+            from tokenizers import Tokenizer
+        except ImportError as exc:
+            raise ValueError("install the image-model extra to use text-to-photo search") from exc
+        try:
+            ort.disable_telemetry_events()
+            session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+            # tokenizer.json pads to 64 tokens with </s> and appends </s> itself.
+            tokenizer = Tokenizer.from_file(str(tokenizer_path))
+        except Exception as exc:
+            raise ValueError("cannot load the pinned text model or tokenizer") from exc
+        inputs = {item.name for item in session.get_inputs()}
+        if (
+            "input_ids" not in inputs
+            or inputs - {"input_ids", "attention_mask"}
+            or not any(output.name == "text_embeds" for output in session.get_outputs())
+        ):
+            raise ValueError("text model has an unexpected input or output contract")
+        self._np = np
+        self._session = session
+        self._tokenizer = tokenizer
+        self._inputs = inputs
+
+    def encode(self, text: str) -> list[float]:
+        ids = self._tokenizer.encode(canonical_text(text)).ids
+        if len(ids) != TEXT_CONTEXT_LENGTH:
+            raise ValueError("tokenizer did not produce 64 tokens")
+        feed = {"input_ids": self._np.asarray([ids], dtype=self._np.int64)}
+        if "attention_mask" in self._inputs:
+            # open_clip, which produced these weights, never masks padding.
+            feed["attention_mask"] = self._np.ones_like(feed["input_ids"])
+        output = self._session.run(["text_embeds"], feed)[0]
+        if output.shape != (1, self.length):
+            raise ValueError("text model returned an incompatible embedding")
+        vector = output[0].astype(self._np.float64)
+        norm = float(self._np.linalg.norm(vector))
+        if not math.isfinite(norm) or norm <= 0:
+            raise ValueError("text model returned a nonfinite embedding")
+        return (vector / norm).tolist()
+
+
+@lru_cache(maxsize=2)
+def _cached_text(model: str, tokenizer: str, stamp: tuple[int, ...]) -> OnnxTextEncoder:
+    return OnnxTextEncoder(Path(model), Path(tokenizer))
+
+
+def get_text_encoder(model_path: Path | None, tokenizer_path: Path | None) -> OnnxTextEncoder:
+    if model_path is None or tokenizer_path is None:
+        raise ValueError("text-to-photo search needs a text model and tokenizer path")
+    try:
+        model = model_path.resolve(strict=True)
+        tokenizer = tokenizer_path.resolve(strict=True)
+        stamp = tuple(
+            value
+            for item in (model.stat(), tokenizer.stat())
+            for value in (item.st_size, item.st_mtime_ns)
+        )
+    except OSError as exc:
+        raise ValueError("text model or tokenizer file is unavailable") from exc
+    return _cached_text(str(model), str(tokenizer), stamp)

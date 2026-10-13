@@ -61,6 +61,11 @@ input:focus,select:focus{outline:2px solid #ffb5a6;outline-offset:1px}
 .upload-button span{font-size:18px;margin-left:14px;font-weight:400}
 .photo-preview{width:100%;height:114px;border:1px dashed #a9bdb0;margin-top:18px;display:grid;place-items:center;overflow:hidden;color:#819789;font-size:11px;text-align:center}
 .photo-preview img{width:100%;height:100%;object-fit:contain}
+.photo-preview.has-photo{height:220px;position:relative;cursor:crosshair;touch-action:none;user-select:none}
+.crop-box{position:absolute;border:2px solid var(--coral);box-shadow:0 0 0 9999px rgba(20,32,28,.35);pointer-events:none}
+.photo-hint{margin:8px 0 0;font-size:11px;color:#74828b;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.clear-crop{border:0;background:none;padding:0;color:#274c43;font-size:11px;font-weight:800;text-decoration:underline;cursor:pointer}
+.look-toggle{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:#315f52;font-weight:700}
 .photo-search{margin-top:12px;background:#fff}
 .photo-panel .photo-message{margin:12px 0 0;color:#315f52;font-weight:700}
 .results-section{padding-top:59px;min-height:300px}

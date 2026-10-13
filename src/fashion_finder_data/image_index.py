@@ -9,6 +9,7 @@ import json
 import math
 import sys
 from array import array
+from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -23,12 +24,14 @@ from .public_catalogue import _public_offer, _safe_image_url, _visible
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
 from .text_match import matches_colour, matches_size
-from .visual_encoder import ImageEncoder, get_encoder
+from .visual_encoder import ImageEncoder, get_encoder, get_text_encoder
 
 INDEX_FILE = "product-image-index.json"
 # Version 2 stores each embedding as base64 little-endian float32, not a JSON list.
 INDEX_VERSION = 2
 MAX_ENTRIES = 20_000
+RESULT_LIMIT = 5
+CONSENSUS_NEIGHBOURS = 20
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 
@@ -268,6 +271,51 @@ def image_index_ready(
         return False
 
 
+def consensus_category(offers: list[dict[str, Any]]) -> str | None:
+    """Return the category holding a rank-weighted majority of the closest offers.
+
+    Weights fall as 1, 1/2, 1/3, … so the nearest matches count most. Without a
+    clear majority the visual order is kept unchanged.
+    """
+    votes: Counter[str] = Counter()
+    total = 0.0
+    for position, offer in enumerate(offers[:CONSENSUS_NEIGHBOURS]):
+        weight = 1 / (position + 1)
+        total += weight
+        if offer["category"]:
+            votes[offer["category"]] += weight
+    if not votes:
+        return None
+    category, weight = votes.most_common(1)[0]
+    return category if weight > total / 2 else None
+
+
+def _rank(
+    encoder: ImageEncoder,
+    query: list[float],
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]],
+    *,
+    consensus: bool,
+) -> dict[str, Any]:
+    distances = _distances(encoder, query, [entry for entry, _ in candidates])
+    order = sorted(range(len(candidates)), key=lambda i: (distances[i], candidates[i][1]["id"]))
+    offers: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for position in order:
+        offer = candidates[position][1]
+        if offer["id"] not in seen:  # an offer's best photo decides its place
+            seen.add(offer["id"])
+            offers.append(offer)
+    result: dict[str, Any] = {"items": [], "next_cursor": None}
+    preferred = consensus_category(offers) if consensus else None
+    if preferred:
+        # A red-dress photo should list dresses before red bags; the sort is stable.
+        offers.sort(key=lambda offer: offer["category"] != preferred)
+        result["preferred_category"] = preferred
+    result["items"] = offers[:RESULT_LIMIT]
+    return result
+
+
 def search_indexed_image(
     database: Database,
     policies: dict[tuple[str, str], SourcePolicy],
@@ -279,6 +327,7 @@ def search_indexed_image(
     size: str | None = None,
     max_price: Decimal | None = None,
     model_path: Path | None = None,
+    consensus: bool = True,
 ) -> dict[str, Any]:
     encoder = get_encoder(model_path)
     query = encoder.encode(image)
@@ -292,17 +341,61 @@ def search_indexed_image(
         size=size,
         max_price=max_price,
     )
-    distances = _distances(encoder, query, [entry for entry, _ in candidates])
-    ranked = sorted(
-        (distance, offer["id"], offer)
-        for distance, (_, offer) in zip(distances, candidates, strict=True)
+    return _rank(encoder, query, candidates, consensus=consensus)
+
+
+def _text_encoder_for(
+    image_encoder: ImageEncoder, text_model_path: Path | None, tokenizer_path: Path | None
+):
+    text_encoder = get_text_encoder(text_model_path, tokenizer_path)
+    if text_encoder.space != image_encoder.space:
+        raise ValueError("text-to-photo search needs an index built with Marqo-FashionSigLIP")
+    return text_encoder
+
+
+def text_index_ready(
+    database: Database,
+    policies: dict[tuple[str, str], SourcePolicy],
+    *,
+    model_path: Path | None = None,
+    text_model_path: Path | None = None,
+    tokenizer_path: Path | None = None,
+) -> bool:
+    try:
+        _text_encoder_for(get_encoder(model_path), text_model_path, tokenizer_path)
+    except ValueError:
+        return False
+    return image_index_ready(database, policies, model_path=model_path)
+
+
+def search_indexed_text(
+    database: Database,
+    policies: dict[tuple[str, str], SourcePolicy],
+    text: str,
+    *,
+    source: str | None = None,
+    category: str | None = None,
+    colour: str | None = None,
+    size: str | None = None,
+    max_price: Decimal | None = None,
+    model_path: Path | None = None,
+    text_model_path: Path | None = None,
+    tokenizer_path: Path | None = None,
+    consensus: bool = True,
+) -> dict[str, Any]:
+    """Rank indexed product photos by how well they match a description."""
+    if not text.strip():
+        raise ValueError("describe the look to search for")
+    image_encoder = get_encoder(model_path)
+    text_encoder = _text_encoder_for(image_encoder, text_model_path, tokenizer_path)
+    candidates = _eligible(
+        database,
+        policies,
+        _load_index(database, image_encoder),
+        source=source,
+        category=category,
+        colour=colour,
+        size=size,
+        max_price=max_price,
     )
-    seen = set()
-    items = []
-    for _, offer_id, offer in ranked:
-        if offer_id not in seen:
-            seen.add(offer_id)
-            items.append(offer)
-        if len(items) == 5:
-            break
-    return {"items": items, "next_cursor": None}
+    return _rank(image_encoder, text_encoder.encode(text), candidates, consensus=consensus)

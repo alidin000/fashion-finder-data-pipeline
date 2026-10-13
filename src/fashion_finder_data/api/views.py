@@ -19,7 +19,12 @@ from PIL import Image, UnidentifiedImageError
 from fashion_finder_data.analytics import record_metric
 from fashion_finder_data.catalogue.models import RetailerOffer
 from fashion_finder_data.demo_images import demo_image_bytes, demo_index_ready, search_demo_image
-from fashion_finder_data.image_index import image_index_ready, search_indexed_image
+from fashion_finder_data.image_index import (
+    image_index_ready,
+    search_indexed_image,
+    search_indexed_text,
+    text_index_ready,
+)
 from fashion_finder_data.public_catalogue import public_offer, search_public_catalogue
 from fashion_finder_data.source_policy import load_policies
 from fashion_finder_data.storage import Database
@@ -56,6 +61,26 @@ def _image_model_path() -> Path | None:
     return Path(configured) if configured else None
 
 
+def _text_model_paths() -> dict[str, Path | None]:
+    model = os.environ.get("FASHION_FINDER_TEXT_MODEL_PATH")
+    tokenizer = os.environ.get("FASHION_FINDER_TOKENIZER_PATH")
+    return {
+        "model_path": _image_model_path(),
+        "text_model_path": Path(model) if model else None,
+        "tokenizer_path": Path(tokenizer) if tokenizer else None,
+    }
+
+
+def _look_search_ready(database: Database, policy_path: Path | None) -> bool:
+    return (
+        policy_path is not None
+        and policy_path.is_file()
+        and os.environ.get("FASHION_FINDER_DEMO_MODE") != "1"
+        and os.environ.get("FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT") == "1"
+        and text_index_ready(database, load_policies(policy_path), **_text_model_paths())
+    )
+
+
 def _error(detail: str, status: int) -> JsonResponse:
     return JsonResponse({"detail": detail}, status=status)
 
@@ -83,6 +108,9 @@ def health(request):
             "status": "ok",
             "catalogue_timestamp": checked,
             "image_search": "available" if image_search_available else "unavailable",
+            "text_to_image": "available"
+            if image_search_available and _look_search_ready(database, policy_path)
+            else "unavailable",
             "analytics_enabled": os.environ.get("FASHION_FINDER_ANALYTICS_ENABLED") == "1",
             "demo_mode": os.environ.get("FASHION_FINDER_DEMO_MODE") == "1",
         }
@@ -138,6 +166,41 @@ def search(request):
             sort=params.get("sort", "price-asc"),
             limit=limit,
             cursor=params.get("cursor"),
+        )
+    except (ValueError, InvalidOperation) as exc:
+        return _error(str(exc), 400)
+    return JsonResponse(result)
+
+
+def search_look(request):
+    """Rank indexed product photos by a written description, e.g. ``black puffer jacket``."""
+    if request.method != "GET":
+        return _error("method not allowed", 405)
+    params = request.GET
+    for key, maximum in {
+        "q": 200,
+        "category": 80,
+        "colour": 80,
+        "size": 40,
+        "source": 40,
+        "max_price": 40,
+    }.items():
+        if len(params.get(key, "")) > maximum:
+            return _error(f"{key} is too long", 400)
+    database, policy_path = _config()
+    if not _look_search_ready(database, policy_path):
+        return _error("text-to-photo search is not configured", 503)
+    try:
+        result = search_indexed_text(
+            database,
+            load_policies(policy_path),
+            params.get("q", ""),
+            source=params.get("source") or None,
+            category=params.get("category") or None,
+            colour=params.get("colour") or None,
+            size=params.get("size") or None,
+            max_price=Decimal(params["max_price"]) if params.get("max_price") else None,
+            **_text_model_paths(),
         )
     except (ValueError, InvalidOperation) as exc:
         return _error(str(exc), 400)

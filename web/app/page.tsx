@@ -2,8 +2,9 @@
 
 /* eslint-disable @next/next/no-img-element -- Do not proxy retailer images; previews are local blob URLs. */
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { clickEvent, errorEvent, MetricEvent, searchEvent, SearchType } from "../lib/analytics";
+import { Box, boxFromPoints, containedRect, imagePoint, overlayRect, pixelBox, Point, Rect } from "../lib/crop";
 import { parseSearchInput } from "../lib/query";
 
 type Offer = {
@@ -23,7 +24,33 @@ type Offer = {
   attribution: string | null;
 };
 
-type SearchResponse = { items: Offer[]; next_cursor: string | null };
+type SearchResponse = { items: Offer[]; next_cursor: string | null; preferred_category?: string };
+
+// The preview uses object-fit: contain, so find where the photo really sits in its frame.
+function measure(element: HTMLImageElement | null): { frame: DOMRect; image: Rect } | null {
+  if (!element || !element.naturalWidth) return null;
+  const frame = element.getBoundingClientRect();
+  return { frame, image: containedRect(frame.width, frame.height, element.naturalWidth, element.naturalHeight) };
+}
+
+// Crop in the browser so only the garment is compared, not the person or background.
+async function croppedPhoto(file: File, box: Box | null): Promise<File> {
+  if (!box) return file;
+  const bitmap = await createImageBitmap(file);
+  try {
+    const { sx, sy, sw, sh } = pixelBox(box, bitmap.width, bitmap.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = sw;
+    canvas.height = sh;
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    return blob ? new File([blob], "crop.jpg", { type: "image/jpeg" }) : file;
+  } finally {
+    bitmap.close();
+  }
+}
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 const money = new Intl.NumberFormat("hu-HU", { maximumFractionDigits: 0 });
@@ -62,6 +89,13 @@ export default function Home() {
   const [preview, setPreview] = useState<string | null>(null);
   const [photoMessage, setPhotoMessage] = useState("");
   const [photoCapability, setPhotoCapability] = useState(false);
+  const [lookCapability, setLookCapability] = useState(false);
+  const [matchByLook, setMatchByLook] = useState(false);
+  const [crop, setCrop] = useState<Box | null>(null);
+  const [draftCrop, setDraftCrop] = useState<Box | null>(null);
+  const [imageRect, setImageRect] = useState<Rect | null>(null);
+  const previewImage = useRef<HTMLImageElement | null>(null);
+  const dragStart = useRef<Point | null>(null);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
   const requestSerial = useRef(0);
@@ -86,13 +120,50 @@ export default function Home() {
   useEffect(() => {
     void fetch(`${API_BASE}/api/v1/health`)
       .then((response) => response.json())
-      .then((health: { image_search?: string; analytics_enabled?: boolean; demo_mode?: boolean }) => {
+      .then((health: { image_search?: string; text_to_image?: string; analytics_enabled?: boolean; demo_mode?: boolean }) => {
         setPhotoCapability(health.image_search === "available");
+        setLookCapability(health.text_to_image === "available");
         setAnalyticsEnabled(health.analytics_enabled === true);
         setDemoMode(health.demo_mode === true);
       })
       .catch(() => setPhotoCapability(false));
   }, []);
+
+  useEffect(() => {
+    const remeasure = () => setImageRect(measure(previewImage.current)?.image ?? null);
+    window.addEventListener("resize", remeasure);
+    return () => window.removeEventListener("resize", remeasure);
+  }, []);
+
+  function pointerPoint(event: ReactPointerEvent<HTMLDivElement>): Point | null {
+    const measured = measure(previewImage.current);
+    if (!measured) return null;
+    setImageRect(measured.image);
+    return imagePoint(event.clientX - measured.frame.left, event.clientY - measured.frame.top, measured.image);
+  }
+
+  function startCrop(event: ReactPointerEvent<HTMLDivElement>) {
+    const point = pointerPoint(event);
+    if (!point) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStart.current = point;
+    setDraftCrop(null);
+  }
+
+  function moveCrop(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragStart.current) return;
+    const point = pointerPoint(event);
+    if (point) setDraftCrop(boxFromPoints(dragStart.current, point));
+  }
+
+  function endCrop(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragStart.current) return;
+    const point = pointerPoint(event);
+    const box = point ? boxFromPoints(dragStart.current, point) : null;
+    dragStart.current = null;
+    setDraftCrop(null);
+    if (box) setCrop(box);
+  }
 
   async function search(cursor?: string, override?: { query: string; maxPrice: string }) {
     const serial = ++requestSerial.current;
@@ -131,18 +202,56 @@ export default function Home() {
     }
   }
 
+  // Rank product photos by the description instead of matching words in titles.
+  async function searchLook(override: { query: string; maxPrice: string }) {
+    const serial = ++requestSerial.current;
+    setStatus("loading");
+    setError("");
+    setItems([]);
+    setNextCursor(null);
+    const params = new URLSearchParams();
+    params.set("q", override.query.trim());
+    if (category) params.set("category", category);
+    if (colour.trim()) params.set("colour", colour.trim());
+    if (size.trim()) params.set("size", size.trim());
+    if (override.maxPrice) params.set("max_price", override.maxPrice);
+    if (source) params.set("source", source);
+    let responseStatus: number | null = null;
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/search/look?${params}`, { cache: "no-store" });
+      responseStatus = response.status;
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(body.detail ?? `Search failed (${response.status}).`);
+      }
+      const result = (await response.json()) as SearchResponse;
+      if (serial !== requestSerial.current) return;
+      setItems(result.items);
+      setStatus("ready");
+      sendMetric(searchEvent("text", Boolean(category || colour || size || override.maxPrice || source), result.items.length));
+    } catch (cause) {
+      if (serial !== requestSerial.current) return;
+      setError(cause instanceof Error ? cause.message : "Search is unavailable.");
+      setStatus("error");
+      sendMetric(errorEvent("text", responseStatus));
+    }
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     lastSearchType.current = "text";
     const parsed = parseSearchInput(query, maxPrice);
     setQuery(parsed.query);
     setMaxPrice(parsed.maxPrice);
-    void search(undefined, parsed);
+    void (matchByLook && lookCapability ? searchLook(parsed) : search(undefined, parsed));
   }
 
   function choosePhoto(file: File | null) {
     setPhoto(file);
     setPhotoMessage("");
+    setCrop(null);
+    setDraftCrop(null);
+    setImageRect(null);
     setPreview(file ? URL.createObjectURL(file) : null);
   }
 
@@ -155,7 +264,7 @@ export default function Home() {
     setPhotoMessage("Checking your photo…");
     let responseStatus: number | null = null;
     const data = new FormData();
-    data.append("file", photo);
+    data.append("file", await croppedPhoto(photo, crop).catch(() => photo));
     if (category) data.append("category", category);
     if (colour.trim()) data.append("colour", colour.trim());
     if (size.trim()) data.append("size", size.trim());
@@ -184,12 +293,16 @@ export default function Home() {
       setStatus("ready");
       lastSearchType.current = "photo";
       sendMetric(searchEvent("photo", Boolean(category || colour || size || maxPrice || source), result.items.length));
-      setPhotoMessage(demoMode ? "Showing visual matches from five CC0 sample images. Results are style inspiration, not verified products." : "Showing experimental visual matches. Check each product on the retailer website.");
+      const grouped = result.preferred_category ? ` Most close matches are ${result.preferred_category}, so those come first.` : "";
+      setPhotoMessage((demoMode ? "Showing visual matches from five CC0 sample images. Results are style inspiration, not verified products." : "Showing experimental visual matches. Check each product on the retailer website.") + grouped);
     } catch {
       setPhotoMessage("The API is unavailable. Start it locally and try again.");
       sendMetric(errorEvent("photo", responseStatus));
     }
   }
+
+  const shownCrop = draftCrop ?? crop;
+  const cropOverlay = preview && imageRect && shownCrop ? overlayRect(shownCrop, imageRect) : null;
 
   return (
     <main>
@@ -223,6 +336,7 @@ export default function Home() {
               <label className="field-label" htmlFor="query">What are you looking for?</label>
               <div className="search-row"><input id="query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="e.g. black jacket under 15000 Ft" /><button className="primary-button" type="submit" disabled={status === "loading"}>Search <span aria-hidden>→</span></button></div>
               <p className="field-hint">Tip: type a budget in your search, or set it below.</p>
+              {lookCapability && <label className="look-toggle"><input type="checkbox" checked={matchByLook} onChange={(event) => setMatchByLook(event.target.checked)} /> Match by look: rank product photos by your description</label>}
               <div className="filter-grid">
                 <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option><option value="jackets">Jackets</option><option value="coats">Coats</option><option value="dresses">Dresses</option><option value="sweaters">Sweaters</option><option value="shirts">Shirts</option><option value="blouses">Blouses</option><option value="tops">Tops</option><option value="trousers">Trousers</option><option value="jeans">Jeans</option><option value="skirts">Skirts</option><option value="shorts">Shorts</option><option value="shoes">Shoes</option><option value="bags">Bags</option><option value="accessories">Accessories</option></select></label>
                 <label>Colour<input value={colour} onChange={(event) => setColour(event.target.value)} placeholder="Any colour, e.g. black or fekete" /></label>
@@ -232,7 +346,7 @@ export default function Home() {
                 <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>
-            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with locally indexed, permitted offers. Visual ranking is experimental." : "Preview your photo here. Visual matching opens when approved product images are available."}</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} /><div className="photo-preview">{preview ? <img src={preview} alt="Your selected clothing photo" /> : <span>Your preview appears here</span>}</div>{photo && <button className="photo-search" type="button" onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message" role="status">{photoMessage}</p>}</div>
+            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with locally indexed, permitted offers. Visual ranking is experimental." : "Preview your photo here. Visual matching opens when approved product images are available."}</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} /><div className={preview ? "photo-preview has-photo" : "photo-preview"} onPointerDown={preview ? startCrop : undefined} onPointerMove={preview ? moveCrop : undefined} onPointerUp={preview ? endCrop : undefined}>{preview ? <img ref={previewImage} src={preview} alt="Your selected clothing photo" draggable={false} onLoad={() => setImageRect(measure(previewImage.current)?.image ?? null)} /> : <span>Your preview appears here</span>}{cropOverlay && <div className="crop-box" style={{ left: cropOverlay.left, top: cropOverlay.top, width: cropOverlay.width, height: cropOverlay.height }} />}</div>{preview && <p className="photo-hint">{crop ? "Only the boxed area is compared." : "Drag across the garment to compare only that part."}{crop && <button className="clear-crop" type="button" onClick={() => setCrop(null)}>Clear crop</button>}</p>}{photo && <button className="photo-search" type="button" onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message" role="status">{photoMessage}</p>}</div>
           </div>
         </section>
 

@@ -119,6 +119,83 @@ preprocessing Marqo publishes for this model, then L2-normalises `image_embeds`.
 Point the API at the same file with `FASHION_FINDER_IMAGE_MODEL_PATH`, as in the
 Docker settings below.
 
+## Text-to-photo search ("match by look")
+
+With a FashionSigLIP photo index, the model's text tower can rank product photos
+by a description such as `black puffer jacket`, instead of matching words in the
+Hungarian titles. It needs the text model and its tokenizer from the same revision:
+
+| File | Size | SHA-256 |
+|---|---|---|
+| `onnx/text_model.onnx` | 441.4 MB | `c1d501b23bddf27ba828c037b0780e44fdf47ca4c0b925ef190ab5bcf7aaf6e6` |
+| `onnx/text_model_quantized.onnx` | 111.1 MB | `f5a7995e029c6ee9346fa46857661c4a171d28b164fa7703b85a527d73adf170` |
+| `tokenizer.json` | 2.4 MB | `5bc9b16db0e7adf5c9a2bd57f8f9c8e6ebdaabe75679cc956d007f78036d5b4a` |
+
+```bash
+REV=c56244cc94f92419e8369fa71efdaf403b124ce8
+curl -fL -o data/models/fashion-siglip-text.onnx \
+  https://huggingface.co/Marqo/marqo-fashionSigLIP/resolve/$REV/onnx/text_model.onnx
+curl -fL -o data/models/fashion-siglip-tokenizer.json \
+  https://huggingface.co/Marqo/marqo-fashionSigLIP/resolve/$REV/tokenizer.json
+sha256sum data/models/fashion-siglip-text.onnx data/models/fashion-siglip-tokenizer.json
+.venv/bin/fashion-finder --data-dir data search-look "black puffer jacket" \
+  --policy data/source-policies.json \
+  --model-path data/models/fashion-siglip-vision.onnx \
+  --text-model-path data/models/fashion-siglip-text.onnx \
+  --tokenizer-path data/models/fashion-siglip-tokenizer.json
+```
+
+The `image-model` extra now installs `tokenizers`. The query is cleaned the way
+open_clip trained the model (lowercase, no punctuation), padded to 64 tokens, and
+embedded as `text_embeds`. English descriptions work best; the model card lists
+English only. For the API and shopper page, also set:
+
+```dotenv
+FASHION_FINDER_TEXT_MODEL_PATH=/data/models/fashion-siglip-text.onnx
+FASHION_FINDER_TOKENIZER_PATH=/data/models/fashion-siglip-tokenizer.json
+```
+
+`GET /api/v1/health` then reports `"text_to_image": "available"`, the search panel
+shows a **Match by look** checkbox, and `GET /api/v1/search/look?q=…` accepts the
+same filters as `/api/v1/search`. Text search refuses an index built with another
+model, because the two embeddings would not be comparable.
+
+## Cropping and the category vote
+
+On the shopper page, drag across the garment in the photo preview. The browser
+crops the photo before upload, so a person or background no longer dominates the
+match. **Clear crop** sends the whole photo again.
+
+When the shopper picks no category, the 20 closest offers vote on one, with weights
+1, 1/2, 1/3, and so on, so the nearest matches count most. If one category holds a
+majority, its offers move to the top in their visual order, and the response
+includes `preferred_category`. A red-dress photo then lists dresses before a red
+bag. Without a clear majority, the order stays purely visual.
+
+## Measure before trusting a model
+
+`evaluate-rankings` replays private tasks with relevance labels; see the
+[task guide](task-evaluation-guide.md). Run it once per model, then compare:
+
+```bash
+.venv/bin/fashion-finder --data-dir data evaluate-rankings tasks/jackets.json \
+  --category jackets --policy data/source-policies.json \
+  --model-path data/models/fashion-siglip-vision.onnx \
+  --text-model-path data/models/fashion-siglip-text.onnx \
+  --tokenizer-path data/models/fashion-siglip-tokenizer.json
+```
+
+| Field | What it compares |
+|---|---|
+| `photo_top5_relevant_mean` | Photo search with the task's category filter |
+| `photo_any_category_top5_relevant_mean` | Photo search with no category, with the vote |
+| `photo_any_category_without_vote_top5_relevant_mean` | The same without the vote |
+| `look_top5_relevant_mean` | Text-to-photo search for each task's query |
+| `text_top5_relevant_mean_on_look_tasks` | Word search for the same queries |
+
+Rebuild the index with each model you compare (`--model-path` changes the index),
+and use the same tasks for every run.
+
 ## Optional pretrained ViT encoder
 
 The optional encoder uses the Apache-2.0

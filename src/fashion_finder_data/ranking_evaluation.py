@@ -16,7 +16,14 @@ from typing import Annotated
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .image_index import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, image_index_ready, search_indexed_image
+from .image_index import (
+    MAX_IMAGE_BYTES,
+    MAX_IMAGE_PIXELS,
+    image_index_ready,
+    search_indexed_image,
+    search_indexed_text,
+    text_index_ready,
+)
 from .public_catalogue import public_offer, search_public_catalogue
 from .readiness import _validate_category
 from .source_policy import SourcePolicy
@@ -81,6 +88,10 @@ def _local_photo(root: Path, relative_name: str) -> Image.Image:
         raise ValueError("cannot decode task photo") from exc
 
 
+def _mean(values: list[int]) -> float | None:
+    return round(mean(values), 2) if values else None
+
+
 def evaluate_rankings(
     database: Database,
     policies: dict[tuple[str, str], SourcePolicy],
@@ -89,8 +100,15 @@ def evaluate_rankings(
     *,
     now: datetime | None = None,
     model_path: Path | None = None,
+    text_model_path: Path | None = None,
+    tokenizer_path: Path | None = None,
 ) -> dict:
-    """Measure actual local rankings against independent, consented labels."""
+    """Measure actual local rankings against independent, consented labels.
+
+    Photo tasks also run without the category filter, with and without the
+    category vote, to show whether the vote helps shoppers who pick no category.
+    With a text model, each query also runs as a text-to-photo ("look") search.
+    """
     _validate_category(category)
     if os.environ.get("FASHION_FINDER_DEMO_MODE") == "1":
         raise ValueError("ranking evaluation cannot run in demo mode")
@@ -112,6 +130,14 @@ def evaluate_rankings(
         database, policies, model_path=model_path
     ):
         raise ValueError("no current permitted image index is available")
+    text_models = {
+        "model_path": model_path,
+        "text_model_path": text_model_path,
+        "tokenizer_path": tokenizer_path,
+    }
+    evaluate_look = text_model_path is not None or tokenizer_path is not None
+    if evaluate_look and not text_index_ready(database, policies, **text_models):
+        raise ValueError("text-to-photo search needs a FashionSigLIP index and text model")
 
     current = now or datetime.now(UTC)
     root = path.resolve().parent
@@ -119,7 +145,11 @@ def evaluate_rankings(
     text_latencies = []
     photo_latencies = []
     photo_scores = []
+    photo_vote_scores = []
+    photo_plain_scores = []
     text_top5_scores = []
+    look_scores = []
+    text_top5_on_look = []
     for task in tasks:
         relevant = {
             offer_id
@@ -156,22 +186,50 @@ def evaluate_rankings(
             "photo_evaluated": False,
         }
         if task.photo_path:
+            any_category = {**filters, "category": None}
             started = perf_counter()
             with _local_photo(root, task.photo_path) as photo:
                 photo_items = search_indexed_image(
                     database, policies, photo, model_path=model_path, **filters
                 )["items"]
-            photo_ms = round((perf_counter() - started) * 1000, 2)
+                photo_ms = round((perf_counter() - started) * 1000, 2)
+                voted = search_indexed_image(
+                    database, policies, photo, model_path=model_path, **any_category
+                )["items"]
+                plain = search_indexed_image(
+                    database,
+                    policies,
+                    photo,
+                    model_path=model_path,
+                    consensus=False,
+                    **any_category,
+                )["items"]
             photo_top5 = sum(item["id"] in relevant for item in photo_items)
             photo_latencies.append(photo_ms)
             photo_scores.append(photo_top5)
+            photo_vote_scores.append(sum(item["id"] in relevant for item in voted))
+            photo_plain_scores.append(sum(item["id"] in relevant for item in plain))
             text_top5_scores.append(text_top5)
             outcome.update(
                 {
                     "photo_evaluated": True,
                     "photo_result_ids": [item["id"] for item in photo_items],
                     "photo_top5_relevant": photo_top5,
+                    "photo_any_category_top5_relevant": photo_vote_scores[-1],
+                    "photo_any_category_without_vote_top5_relevant": photo_plain_scores[-1],
                     "photo_latency_ms": photo_ms,
+                }
+            )
+        if evaluate_look and task.query.strip():
+            look_items = search_indexed_text(
+                database, policies, task.query, **text_models, **filters
+            )["items"]
+            look_scores.append(sum(item["id"] in relevant for item in look_items))
+            text_top5_on_look.append(text_top5)
+            outcome.update(
+                {
+                    "look_result_ids": [item["id"] for item in look_items],
+                    "look_top5_relevant": look_scores[-1],
                 }
             )
         outcomes.append(outcome)
@@ -191,6 +249,11 @@ def evaluate_rankings(
         if text_top5_scores
         else None,
         "photo_latency_median_ms": median(photo_latencies) if photo_latencies else None,
+        "photo_any_category_top5_relevant_mean": _mean(photo_vote_scores),
+        "photo_any_category_without_vote_top5_relevant_mean": _mean(photo_plain_scores),
+        "look_tasks_evaluated": len(look_scores),
+        "look_top5_relevant_mean": _mean(look_scores),
+        "text_top5_relevant_mean_on_look_tasks": _mean(text_top5_on_look),
         "task_outcomes": outcomes,
         "ranking_computed_by_tool": True,
         "consent_verified_by_tool": False,
