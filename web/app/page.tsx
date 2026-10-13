@@ -34,9 +34,8 @@ function formatHuf(amount: string) {
 }
 
 function sourceName(key: string) {
-  return { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", aboutyou: "ABOUT YOU", answear: "Answear", demo: "Local demo" }[
-    key as "hm" | "pullandbear" | "zara" | "reserved" | "aboutyou" | "answear" | "demo"
-  ] ?? key;
+  const names: Record<string, string> = { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", sinsay: "Sinsay", mohito: "Mohito", house: "House", cropp: "Cropp", aboutyou: "ABOUT YOU", answear: "Answear", demo: "Local demo" };
+  return names[key] ?? key;
 }
 
 function matchName(value: Offer["match_type"]) {
@@ -229,7 +228,7 @@ export default function Home() {
                 <label>Colour<input value={colour} onChange={(event) => setColour(event.target.value)} placeholder="Any colour" /></label>
                 <label>Maximum price · Ft<input type="number" min="0" step="1" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="No limit" /></label>
                 <label>Size<input value={size} onChange={(event) => setSize(event.target.value)} placeholder="Any size" /></label>
-                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">{demoMode ? "All demo items" : "All approved shops"}</option>{demoMode ? <option value="demo">Local demo</option> : <><option value="reserved">Reserved</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></>}</select></label>
+                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">{demoMode ? "All demo items" : "All approved shops"}</option>{demoMode ? <option value="demo">Local demo</option> : <><option value="reserved">Reserved</option><option value="sinsay">Sinsay</option><option value="mohito">Mohito</option><option value="house">House</option><option value="cropp">Cropp</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></>}</select></label>
                 <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>

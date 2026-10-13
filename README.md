@@ -221,6 +221,8 @@ fashion-finder sources list
 fashion-finder collect reserved --limit 1
 fashion-finder collect all --limit 1
 fashion-finder collect reserved --limit 3 --url https://www.reserved.com/hu/hu/noi/ruhak
+fashion-finder collect sinsay --limit 300
+fashion-finder collect cropp --limit 500 --url https://www.cropp.com/hu/hu/ferfi/ruhazat/farmerek
 fashion-finder collect zara --browser --limit 3
 fashion-finder collect hm --browser --limit 3
 fashion-finder collect pullandbear --browser --limit 3
@@ -247,7 +249,16 @@ It reports the HTTP status and visible product link/price counts without importi
 any records. A browser can render JavaScript, but it cannot guarantee access to
 pages that return HTTP 403. The diagnostic uses no stealth settings.
 
-Reserved recognizes the public `kabatok`, `ruhak`, and `puloverek` category paths as coats, dresses, and sweaters. Other Reserved category overrides retain an unknown category until mapped. The H&M adapter can read complete HUF offers from category cards if the page is accessible, but the live Scrapy check here was blocked before parsing.
+Reserved, Sinsay, Mohito, House and Cropp run on one LPP storefront platform. Their
+category pages embed the listed products with price, regular price, images, colour and
+per-size stock, so collection stores offers straight from the listing without one
+request per product. Listings are cumulative (`?page=N` repeats earlier pages), so the
+collector jumps to the page that should cover `--limit`. On 2026-10-13, 300 Sinsay
+jackets took three category requests (pages 1, 5 and 6), not 300 product requests. One product listed under alias URLs
+(`coat-2-…`) is stored once, under its plain URL. Pages without the embedded listing
+fall back to following product links.
+
+Reserved recognizes the public `kabatok`, `ruhak`, and `puloverek` category paths as coats, dresses, and sweaters. For LPP category URLs, a final path word such as `dzsekik` or `farmerek` maps to its category; a path that names two categories, such as `dzsekik-kabatok`, stays unclassified. The H&M adapter can read complete HUF offers from category cards if the page is accessible, but the live Scrapy check here was blocked before parsing.
 
 Every collection writes raw JSONL under `data/raw/<source>/`, a run report under `data/reports/`, offers and price changes in `data/fashion_finder.sqlite`, and refreshed JSONL/CSV exports under `data/exports/`. These local outputs are ignored by Git. Repeat runs update an offer and add a price observation only when its price or currency changes.
 
@@ -306,7 +317,7 @@ also require `observed_at` with a timezone. The dry-run validator writes no
 database or raw archive. No partner feed for the candidate sources has been
 provided or verified; see the [onboarding steps](docs/hungarian-source-candidates.md).
 
-The first category page only is sampled; pagination and full-catalogue coverage are not implemented. The limit is 1–100 product offers per source across all starting URLs, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
+LPP sources page through a category until `--limit` is met. Other sources sample the first category page only. Neither covers a full catalogue unless you pass its categories with `--url`. The limit is 1–1000 product offers per source across all starting URLs, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
 
 ## First success criteria
 

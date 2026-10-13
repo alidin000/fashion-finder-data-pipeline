@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 CATEGORIES = {
     "coats",
@@ -59,3 +60,20 @@ def normalize_category(value: str | None) -> str | None:
         return None
     key = re.sub(r"[\s_-]+", " ", value.strip().casefold())
     return key if key in CATEGORIES else ALIASES.get(key)
+
+
+def _ascii(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value.casefold())
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
+SLUG_ALIASES = {_ascii(alias): category for alias, category in ALIASES.items()}
+
+
+def category_from_slug(slug: str) -> str | None:
+    """Map a URL slug such as ``dzsekik`` only when its words name one category.
+
+    ``kabatok-dzsekik`` names two categories and stays unclassified.
+    """
+    matches = {SLUG_ALIASES.get(word) for word in _ascii(slug).split("-")} - {None}
+    return matches.pop() if len(matches) == 1 else None

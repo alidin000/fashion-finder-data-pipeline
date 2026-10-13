@@ -3,7 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlsplit
+
+SourceKey = Literal[
+    "zara",
+    "hm",
+    "reserved",
+    "sinsay",
+    "mohito",
+    "house",
+    "cropp",
+    "pullandbear",
+    "aboutyou",
+    "answear",
+    "demo",
+]
 
 
 @dataclass(frozen=True)
@@ -15,10 +30,25 @@ class Source:
     product_pattern: str | None
     card_selector: str | None = None
     market_paths: tuple[str, ...] = ("/hu/", "/hu_hu/")
+    # "lpp": category pages embed their product list (LPP group storefronts).
+    listing: str | None = None
 
     @property
     def crawl_enabled(self) -> bool:
         return self.category_url is not None and self.product_pattern is not None
+
+
+def lpp_source(key: str, host: str, category_url: str, category: str | None) -> Source:
+    """Reserved, Sinsay, Mohito, House and Cropp share one storefront platform."""
+    return Source(
+        key,
+        host,
+        category_url,
+        category,
+        r"/hu/hu/[^/]+-[a-z0-9]{3,}-[a-z0-9]{2,}$",
+        "article.es-product a.es-product-photo::attr(href)",
+        listing="lpp",
+    )
 
 
 # Feed-only sources have no invented category URL or unverified page parser.
@@ -37,13 +67,23 @@ SOURCES = {
         "jackets",
         r"productpage\.\d+\.html(?:$|\?)",
     ),
-    "reserved": Source(
-        "reserved",
-        "reserved.com",
-        "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok",
-        "coats",
-        r"/hu/hu/[^/]+-[a-z0-9]{3,}-[a-z0-9]{2,}$",
-        "article.es-product a.es-product-photo::attr(href)",
+    "reserved": lpp_source(
+        "reserved", "reserved.com", "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok", "coats"
+    ),
+    "sinsay": lpp_source(
+        "sinsay", "sinsay.com", "https://www.sinsay.com/hu/hu/noi/ruhazat/dzsekik", "jackets"
+    ),
+    "mohito": lpp_source(
+        "mohito", "mohito.com", "https://www.mohito.com/hu/hu/ruhazat/kabatok", "coats"
+    ),
+    "house": lpp_source(
+        "house",
+        "housebrand.com",
+        "https://www.housebrand.com/hu/hu/noi/ruhak/kabatok-dzsekik",
+        None,
+    ),
+    "cropp": lpp_source(
+        "cropp", "cropp.com", "https://www.cropp.com/hu/hu/noi/ruhazat/dzsekik-kabatok", None
     ),
     "pullandbear": Source(
         "pullandbear",

@@ -12,9 +12,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from .sources import SourceKey
+
 
 class SourcePolicy(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear", "demo"]
+    source_key: SourceKey
     market_code: Literal["HU"] = "HU"
     approval_status: Literal["pending", "approved", "revoked"] = "pending"
     evidence_ref: str | None = None

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from .audit import audit_report
-from .collectors import crawl
+from .collectors import MAX_LIMIT, crawl
 from .evaluation import evaluate_tasks
 from .feed import import_feed, validate_feed
 from .feed_mapping import map_xml_feed
@@ -38,7 +38,10 @@ def make_parser() -> argparse.ArgumentParser:
     collect = commands.add_parser("collect", help="Collect a bounded product sample")
     collect.add_argument("source", choices=[*CRAWL_SOURCES, "all"])
     collect.add_argument(
-        "--limit", type=int, default=5, help="Maximum product offers per source (1–100)"
+        "--limit",
+        type=int,
+        default=5,
+        help=f"Maximum product offers per source (1–{MAX_LIMIT})",
     )
     collect.add_argument(
         "--url", action="append", help="Starting category or product URL; one source only"
@@ -185,8 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     if args.command == "collect":
-        if not 1 <= args.limit <= 100:
-            parser.error("--limit must be between 1 and 100")
+        if not 1 <= args.limit <= MAX_LIMIT:
+            parser.error(f"--limit must be between 1 and {MAX_LIMIT}")
         if args.source == "all" and args.url:
             parser.error("--url can only be used with one source")
         if not 0 <= args.browser_wait_ms <= 10000:

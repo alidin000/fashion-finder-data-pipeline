@@ -13,13 +13,22 @@ from .schema import utc_now
 from .sources import SOURCES, allowed_url
 from .storage import Database, offer_rows
 
+LPP_POLICY = {
+    "web_evidence": (
+        "explicit Product offer availability on an accessible product page, "
+        "or per-size stock flags in the embedded category listing"
+    ),
+    "missing_from_sample": "recheck",
+    "http_403_429_5xx": "recheck",
+    "http_404_410": "manual_review",
+}
+
 SOURCE_POLICY = {
-    "reserved": {
-        "web_evidence": "explicit Product offer availability on an accessible product page",
-        "missing_from_sample": "recheck",
-        "http_403_429_5xx": "recheck",
-        "http_404_410": "manual_review",
-    },
+    "reserved": LPP_POLICY,
+    "sinsay": LPP_POLICY,
+    "mohito": LPP_POLICY,
+    "house": LPP_POLICY,
+    "cropp": LPP_POLICY,
     "hm": {
         "web_evidence": "none verified; category cards do not establish stock",
         "missing_from_sample": "recheck",

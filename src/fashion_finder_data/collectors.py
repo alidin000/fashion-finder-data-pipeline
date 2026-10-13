@@ -7,20 +7,23 @@ import re
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import scrapy
 from scrapy.crawler import CrawlerProcess
 from scrapy.http import Response
 from scrapy_playwright.page import PageMethod
 
-from .schema import RawProductRecord, utc_now
+from .schema import RawProductRecord, parse_money, utc_now
 from .sources import (
     CRAWL_SOURCES,
     SOURCES,  # noqa: F401 - compatibility for existing callers
     Source,
     allowed_url,
 )
+from .taxonomy import category_from_slug
+
+MAX_LIMIT = 1000
 
 RESERVED_CATEGORIES = {
     "/hu/hu/noi/ruhazat/kabatok": "coats",
@@ -29,15 +32,22 @@ RESERVED_CATEGORIES = {
     "/hu/hu/noi/puloverek": "sweaters",
 }
 
+LPP_CATALOGUE = "window.getCatalogData"
+LPP_PRODUCTS = re.compile(r"\n\s*products\s*:\s*(?=\[)")
+LPP_PAGING_KEYS = ("page", "maxPage", "pageSize", "startSize", "currentSize", "productsQuantity")
+
 
 def source_for_page(source: Source, url: str) -> Source:
-    if source.key != "reserved":
+    if source.listing != "lpp":
         return source
+    if re.search(source.product_pattern or "", url, re.IGNORECASE):
+        return replace(source, category=None)
     path = urlsplit(url).path.rstrip("/")
-    for prefix, category in RESERVED_CATEGORIES.items():
-        if path == prefix or path.startswith(prefix + "/"):
-            return replace(source, category=category)
-    return replace(source, category=None)
+    if source.key == "reserved":
+        for prefix, category in RESERVED_CATEGORIES.items():
+            if path == prefix or path.startswith(prefix + "/"):
+                return replace(source, category=category)
+    return replace(source, category=category_from_slug(path.rsplit("/", 1)[-1]))
 
 
 def product_links(
@@ -110,6 +120,126 @@ def extract_hm_cards(
         if len(records) >= limit:
             break
     return records
+
+
+def lpp_catalogue(response: Response) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Read the product list and paging numbers an LPP category page embeds."""
+    text = response.text
+    start = text.find(LPP_CATALOGUE)
+    match = LPP_PRODUCTS.search(text, start) if start >= 0 else None
+    if match is None:
+        raise ValueError("no embedded storefront catalogue")
+    try:
+        products, _ = json.JSONDecoder(parse_float=Decimal).raw_decode(text, match.end())
+    except json.JSONDecodeError as exc:
+        raise ValueError("malformed embedded storefront catalogue") from exc
+    products = products if isinstance(products, list) else []
+    paging = {}
+    for key in LPP_PAGING_KEYS:
+        found = re.compile(rf"\n\s*{key}\s*:\s*(\d+)\s*,").search(text, start)
+        if found:
+            paging[key] = int(found[1])
+    return [item for item in products if isinstance(item, dict)], paging
+
+
+def lpp_record(item: dict[str, Any], source: Source, page_url: str) -> RawProductRecord:
+    url = urljoin(page_url, str(item.get("url") or ""))
+    if not allowed_url(source, url) or not re.search(
+        source.product_pattern or "", url, re.IGNORECASE
+    ):
+        raise ValueError("product URL is outside the Hungarian storefront")
+    currency = item.get("currency")
+    price = item.get("minQtyFinalPrice", item.get("final_price"))
+    regular = item.get("minQtyRegularPrice", item.get("price"))
+    try:
+        discounted = parse_money(regular, currency) > parse_money(price, currency)
+    except (TypeError, ValueError):
+        discounted = False
+    images = []
+    for photo in item.get("gallery") or []:
+        if not isinstance(photo, dict) or photo.get("type") != "photo":
+            continue
+        original = (photo.get("sizes") or {}).get("original")
+        if isinstance(original, str) and original.startswith("https://"):
+            images.append(original)
+    sizes = [size for size in item.get("sizes") or [] if isinstance(size, dict)]
+    stock = [size.get("stock") for size in sizes]
+    availability = (
+        "in_stock"
+        if True in stock
+        else "out_of_stock"
+        if stock and all(flag is False for flag in stock)
+        else "unknown"
+    )
+    colours = [
+        option["color"]["name"]
+        for option in item.get("colorOptions") or []
+        if isinstance(option, dict)
+        and option.get("sku") == item.get("sku")
+        and isinstance(option.get("color"), dict)
+        and option["color"].get("name")
+    ]
+    merchant = item.get("merchant")
+    return RawProductRecord(
+        source_key=source.key,
+        market_code="HU",
+        source_url=page_url,
+        fetched_at=utc_now(),
+        adapter_version="lpp-catalogue-v1",
+        product={
+            "url": url,
+            "sku": item.get("sku"),
+            "name": item.get("name"),
+            "brand": merchant.get("name") if isinstance(merchant, dict) else None,
+            "category": source.category,
+            "price": price,
+            "currency": currency,
+            "original_price": regular if discounted else None,
+            "images": images,
+            "colours": colours,
+            "sizes": [size["sizeName"] for size in sizes if size.get("sizeName")],
+            "availability": availability,
+            "_source_payload": {
+                key: item[key]
+                for key in ("id", "sku", "name", "url", "currency", "final_price", "price", "sizes")
+                if key in item
+            },
+        },
+    )
+
+
+def unique_by_sku(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Storefronts list one product under alias URLs (``coat-2-…``); keep the shortest URL."""
+    chosen: dict[Any, dict[str, Any]] = {}
+    for item in items:
+        key = item.get("sku") or item.get("url")
+        current = chosen.get(key)
+        if current is None or len(str(item.get("url"))) < len(str(current.get("url"))):
+            chosen[key] = item  # an existing key keeps its first listing position
+    return list(chosen.values())
+
+
+def lpp_next_page(paging: dict[str, int], wanted: int) -> int | None:
+    """Pick the listing page that holds ``wanted`` products, or None when done.
+
+    LPP listings are cumulative: page N repeats pages 1..N-1 and appends
+    ``pageSize`` more products, so a single request can reach deep into a category.
+    """
+    page, last = paging.get("page", 1), paging.get("maxPage", 1)
+    shown, total = paging.get("currentSize"), paging.get("productsQuantity")
+    if page >= last or (shown is not None and total is not None and shown >= total):
+        return None
+    start, size = paging.get("startSize", paging.get("pageSize")), paging.get("pageSize")
+    if not start or not size:
+        return page + 1
+    needed = 1 + -(-max(0, wanted - start) // size)
+    return min(last, max(page + 1, needed))
+
+
+def with_page(url: str, page: int) -> str:
+    parts = urlsplit(url)
+    query = [(key, value) for key, value in parse_qsl(parts.query) if key != "page"]
+    return urlunsplit(parts._replace(query=urlencode([*query, ("page", str(page))])))
 
 
 def _product_node(obj: Any) -> dict[str, Any] | None:
@@ -223,6 +353,7 @@ class ProductSpider(scrapy.Spider):
         self.browser_wait_ms = browser_wait_ms
         self.allowed_domains = [source.host for source in sources]
         self.scheduled_products: dict[str, set[str]] = {source.key: set() for source in sources}
+        self.listed_skus: dict[str, set[str]] = {}
 
     def _remaining(self, source_key: str) -> int:
         return self.limit - len(self.scheduled_products[source_key])
@@ -310,6 +441,14 @@ class ProductSpider(scrapy.Spider):
             if not added and self._remaining(source.key) > 0:
                 self.state.error(source.key, "no complete HUF product cards on category page")
             return
+        if source.listing == "lpp" and not is_product_url:
+            try:
+                items, paging = lpp_catalogue(response)
+            except ValueError:
+                pass  # older markup: fall back to product links below
+            else:
+                yield from self.parse_lpp_listing(response, source, items, paging)
+                return
         try:
             record = extract_product(response, source)
         except (ValueError, TypeError) as exc:
@@ -344,6 +483,48 @@ class ProductSpider(scrapy.Spider):
                 meta=self._request_meta(source.key),
             )
 
+    def parse_lpp_listing(
+        self,
+        response: Response,
+        source: Source,
+        items: list[dict[str, Any]],
+        paging: dict[str, int],
+    ):
+        """Store listed offers directly; request a deeper page only if the limit needs it."""
+        added = 0
+        seen_skus = self.listed_skus.setdefault(source.key, set())
+        for item in unique_by_sku(items):
+            if self._remaining(source.key) == 0:
+                return
+            if item.get("sku") in seen_skus:
+                continue
+            try:
+                record = lpp_record(item, source, response.url)
+            except (ValueError, TypeError) as exc:
+                self.state.error(source.key, f"catalogue product skipped: {exc}")
+                continue
+            if self._reserve_product(source.key, str(record.product["url"])):
+                self.state.records.setdefault(source.key, []).append(record)
+                if record.product["sku"]:
+                    seen_skus.add(record.product["sku"])
+                added += 1
+        if not items:
+            self.state.error(source.key, "embedded storefront catalogue lists no products")
+            return
+        if not added and paging.get("page", 1) > 1:
+            return
+        page = lpp_next_page(
+            paging, paging.get("currentSize", len(items)) + self._remaining(source.key)
+        )
+        if page is not None:
+            yield scrapy.Request(
+                with_page(response.url, page),
+                callback=self.parse_page,
+                errback=self.failed,
+                cb_kwargs={"source": source},
+                meta=self._request_meta(source.key),
+            )
+
     def parse_product(self, response: Response, source: Source) -> None:
         try:
             self.state.records.setdefault(source.key, []).append(extract_product(response, source))
@@ -360,8 +541,8 @@ def crawl(
 ) -> CrawlState:
     if any(source.key not in CRAWL_SOURCES for source in sources):
         raise ValueError("feed-only sources cannot be crawled")
-    if not 1 <= limit <= 100:
-        raise ValueError("limit must be between 1 and 100")
+    if not 1 <= limit <= MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {MAX_LIMIT}")
     if not 0 <= browser_wait_ms <= 10000:
         raise ValueError("browser wait must be between 0 and 10000 milliseconds")
     state = CrawlState()

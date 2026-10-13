@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .catalogue.models import DailyMetric
 from .source_policy import SourcePolicy
+from .sources import SourceKey
 from .storage import Database
 
 
@@ -21,9 +22,7 @@ class MetricEvent(BaseModel):
     search_type: Literal["text", "photo"]
     filtered: bool = False
     result_count: int | None = Field(default=None, ge=0, le=10000)
-    source_key: (
-        Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear", "demo"] | None
-    ) = None
+    source_key: SourceKey | None = None
     error_code: Literal["http_4xx", "http_5xx", "network", "other"] | None = None
 
     @model_validator(mode="after")

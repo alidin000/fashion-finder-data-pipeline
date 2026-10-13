@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .sources import is_hungarian_source_url
+from .sources import SourceKey, is_hungarian_source_url
 from .taxonomy import normalize_category
 
 
@@ -63,7 +63,7 @@ def parse_money(value: Any, currency: str | None = None) -> Decimal | None:
 
 
 class RawProductRecord(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear", "demo"]
+    source_key: SourceKey
     market_code: Literal["HU"] = "HU"
     source_url: str
     fetched_at: datetime = Field(default_factory=utc_now)
@@ -78,7 +78,7 @@ class RawProductRecord(BaseModel):
 
 
 class RetailerOffer(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear", "demo"]
+    source_key: SourceKey
     market_code: Literal["HU"] = "HU"
     source_product_id: str | None = None
     source_url: str

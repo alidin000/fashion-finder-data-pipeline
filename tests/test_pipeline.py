@@ -203,6 +203,116 @@ def test_reserved_category_override_uses_matching_taxonomy() -> None:
     assert source_for_page(SOURCES["reserved"], URL).category is None
 
 
+SINSAY_JACKETS = "https://www.sinsay.com/hu/hu/noi/ruhazat/dzsekik"
+
+
+def lpp_item(number: int, price: int = 13595, regular: int | None = None, stock=(True,)) -> dict:
+    sku = f"{number}11HH-88X"
+    photo = f"https://static.sinsay.com/media/catalog/product/{sku}-001.jpg"
+    return {
+        "sku": sku,
+        "name": "Steppelt kapucnis kabát",
+        "url": f"https://www.sinsay.com/hu/hu/steppelt-kabat-{sku.lower()}",
+        "currency": "HUF",
+        "minQtyFinalPrice": price,
+        "minQtyRegularPrice": regular or price,
+        "gallery": [{"type": "photo", "sizes": {"original": photo}}, {"type": "video"}],
+        "sizes": [{"sizeName": name, "stock": flag} for name, flag in zip(["XS", "S"], stock)],
+        "colorOptions": [
+            {"sku": sku, "color": {"name": "barna"}},
+            {"sku": "OTHER-99X", "color": {"name": "fekete"}},
+        ],
+        "merchant": {"name": "Sinsay"},
+    }
+
+
+def lpp_page(url: str, products: list[dict], **paging: int) -> HtmlResponse:
+    """Mimic the catalogue object LPP storefronts embed in category pages."""
+    values = {"page": 1, "maxPage": 1, "pageSize": 2, "startSize": 2} | paging
+    values.setdefault("currentSize", len(products))
+    lines = "".join(f"\n    {key}: {value}," for key, value in values.items())
+    return response(
+        url,
+        "<script>window.getCatalogData = function() { return {\n    products: "
+        + json.dumps(products)
+        + ","
+        + lines
+        + "\n}; };</script>",
+    )
+
+
+def test_lpp_listing_stores_complete_offers_without_product_requests() -> None:
+    source = SOURCES["sinsay"]
+    off_market = lpp_item(3) | {"url": "https://www.sinsay.com/pl/pl/kurtka-311hh-88x"}
+    page = lpp_page(
+        SINSAY_JACKETS,
+        [lpp_item(1, regular=15995), lpp_item(2, stock=(False, False)), off_market],
+    )
+    state = CrawlState()
+    spider = ProductSpider([source], state, 10)
+    assert list(spider.parse_page(page, source)) == []
+    first, second = (normalize(record) for record in state.records["sinsay"])
+    assert first.price_amount == Decimal(13595)
+    assert first.original_price_amount == Decimal(15995)
+    assert first.currency == "HUF"
+    assert first.category == "jackets"
+    assert first.brand == "Sinsay"
+    assert first.colour_names == ["barna"]
+    assert first.size_options == ["XS"]
+    assert first.availability_status == "in_stock"
+    assert first.image_urls == ["https://static.sinsay.com/media/catalog/product/111HH-88X-001.jpg"]
+    assert second.original_price_amount is None
+    assert second.availability_status == "out_of_stock"
+    assert state.discovered["sinsay"] == 2
+    assert state.errors["sinsay"] == [
+        "catalogue product skipped: product URL is outside the Hungarian storefront"
+    ]
+
+
+def test_lpp_listing_jumps_to_the_cumulative_page_the_limit_needs() -> None:
+    source = SOURCES["sinsay"]
+    items = [lpp_item(number) for number in range(1, 7)]
+    state = CrawlState()
+    spider = ProductSpider([source], state, 5)
+    first = list(
+        spider.parse_page(
+            lpp_page(SINSAY_JACKETS, items[:2], maxPage=5, productsQuantity=10), source
+        )
+    )
+    # Two products shown, five wanted: page 3 of a cumulative listing holds six.
+    assert [request.url for request in first] == [SINSAY_JACKETS + "?page=3"]
+    deeper = lpp_page(first[0].url, items, page=3, maxPage=5, productsQuantity=10)
+    assert list(spider.parse_page(deeper, source)) == []
+    assert [record.product["sku"] for record in state.records["sinsay"]] == [
+        item["sku"] for item in items[:5]
+    ]
+    assert state.discovered["sinsay"] == 5
+
+
+def test_lpp_alias_urls_count_once_and_keep_the_plain_product_url() -> None:
+    source = SOURCES["sinsay"]
+    plain = lpp_item(1)
+    alias = plain | {"url": plain["url"].replace("kabat-", "kabat-2-")}
+    state = CrawlState()
+    spider = ProductSpider([source], state, 2)
+    list(spider.parse_page(lpp_page(SINSAY_JACKETS, [alias, plain, lpp_item(2)]), source))
+    assert [record.product["url"] for record in state.records["sinsay"]] == [
+        plain["url"],
+        lpp_item(2)["url"],
+    ]
+
+
+def test_lpp_category_slug_must_name_one_category() -> None:
+    assert source_for_page(SOURCES["sinsay"], SINSAY_JACKETS).category == "jackets"
+    assert (
+        source_for_page(SOURCES["mohito"], "https://www.mohito.com/hu/hu/ruhazat/kabatok").category
+        == "coats"
+    )
+    cropp = "https://www.cropp.com/hu/hu/noi/ruhazat/dzsekik-kabatok"
+    assert source_for_page(SOURCES["cropp"], cropp).category is None
+    assert source_for_page(SOURCES["sinsay"], lpp_item(1)["url"]).category is None
+
+
 def test_price_and_product_url_validation() -> None:
     assert parse_money("62,995 Ft", "HUF") == Decimal(62995)
     assert parse_money("19\u00a0995", "HUF") == Decimal(19995)
