@@ -130,9 +130,12 @@ A private beta needs two approved sources with at least 100 current offers in
 one category, 30 manually checked offers per source, 30 consented shopping
 tasks with at least 24 successful, permitted image relevance evidence, and a
 live source-to-browser test. The [application progress](docs/application-progress.md)
-tracks the implemented work and open gates. The [task evaluation guide](docs/task-evaluation-guide.md)
-describes how to record the real-user result without saving queries or photos
-in the report.
+tracks the implemented work and open gates. The [release handoff](docs/release-gate-handoff.md)
+lists the exact outstanding evidence. The [partner access handoff](docs/partner-access-handoff.md)
+and [shopper research handoff](docs/shopper-research-handoff.md) provide the
+operator steps. The [task evaluation guide](docs/task-evaluation-guide.md)
+describes how to record real-user results without saving queries or photos in
+the report.
 
 ## Collection tools and source status
 

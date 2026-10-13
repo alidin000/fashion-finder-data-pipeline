@@ -19,6 +19,8 @@ data/audits/**
 data/feeds/**
 data/worker-state.json
 data/evaluation/**
+data/partner/**
+data/research/**
 data/*.sqlite
 data/*.db
 data/source-policies*.json
