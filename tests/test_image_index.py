@@ -173,3 +173,19 @@ def test_invalid_manifest_does_not_replace_a_working_index(tmp_path):
     with pytest.raises(ValueError, match="not permitted"):
         build_image_index(database, denied, manifest_path)
     assert hashlib.sha256(target.read_bytes()).hexdigest() == initial_hash
+
+
+def test_model_change_cannot_reuse_an_incompatible_image_index(tmp_path):
+    database, manifest_path, policies, _manifest = _catalogue(tmp_path)
+    build_image_index(database, policies, manifest_path)
+    target = tmp_path / INDEX_FILE
+    initial_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+
+    missing_model = tmp_path / "missing.onnx"
+    assert not image_index_ready(database, policies, model_path=missing_model)
+
+    wrong_model = tmp_path / "wrong.onnx"
+    wrong_model.write_bytes(b"not the pinned image model")
+    with pytest.raises(ValueError, match="pinned ViT artifact"):
+        build_image_index(database, policies, manifest_path, model_path=wrong_model)
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == initial_hash

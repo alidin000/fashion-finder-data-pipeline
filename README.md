@@ -9,8 +9,9 @@ The repository is a working **local prototype**, not a public shopping service.
 The default source policy publishes no offers. Photo upload has a real preview.
 The isolated demo compares five CC0 images by coarse colour and layout. An
 [offline image-index experiment](docs/local-image-index.md) can use locally
-supplied, policy-permitted feed photos. Real retailer photo search still needs
-source rights, a validated encoder, and real-user evaluation.
+supplied, policy-permitted feed photos with either the built-in descriptor or
+an optional pinned pretrained ViT encoder. Real retailer photo search still
+needs source rights and real-user relevance evaluation.
 
 ## What it looks like
 
@@ -185,6 +186,7 @@ for the full contracts and delivery sequence.
 - Pydantic for schema validation
 - Django ORM and migrations with SQLite for local persistence, API, and catalogue review
 - Next.js and TypeScript for the shopper page
+- Optional ONNX Runtime and a pinned local ViT encoder for visual evaluation
 - Docker Compose, Gunicorn, and WhiteNoise for local deployment
 - JSONL for raw snapshots and portable exports
 - Pytest, Ruff, ESLint, and TypeScript checks

@@ -136,6 +136,10 @@ def make_parser() -> argparse.ArgumentParser:
     rankings.add_argument(
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
+    model_default = os.environ.get("FASHION_FINDER_IMAGE_MODEL_PATH")
+    rankings.add_argument(
+        "--model-path", type=Path, default=Path(model_default) if model_default else None
+    )
     rankings.add_argument("--output", type=Path, help="Create a JSON report file")
     images = commands.add_parser(
         "index-images", help="Build a local image-search experiment from permitted files"
@@ -143,6 +147,9 @@ def make_parser() -> argparse.ArgumentParser:
     images.add_argument("manifest", type=Path)
     images.add_argument(
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    images.add_argument(
+        "--model-path", type=Path, default=Path(model_default) if model_default else None
     )
     metrics = commands.add_parser("analytics-report", help="Show anonymous daily event totals")
     metrics.add_argument("--days", type=int, default=7)
@@ -287,7 +294,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.policy is None:
                 raise ValueError("--policy is required to index images")
-            result = build_image_index(engine, load_policies(args.policy), args.manifest)
+            result = build_image_index(
+                engine, load_policies(args.policy), args.manifest, model_path=args.model_path
+            )
         except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -321,7 +330,9 @@ def main(argv: list[str] | None = None) -> int:
                 elif args.command == "evaluate-tasks":
                     result = evaluate_tasks(engine, policies, args.category, args.path)
                 else:
-                    result = evaluate_rankings(engine, policies, args.category, args.path)
+                    result = evaluate_rankings(
+                        engine, policies, args.category, args.path, model_path=args.model_path
+                    )
                 body = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
                 if args.output:
                     args.output.parent.mkdir(parents=True, exist_ok=True)

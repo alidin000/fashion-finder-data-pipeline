@@ -9,7 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir .
+ARG FASHION_FINDER_INSTALL_IMAGE_MODEL=0
+RUN if [ "$FASHION_FINDER_INSTALL_IMAGE_MODEL" = "1" ]; then \
+      python -m pip install --no-cache-dir '.[image-model]'; \
+    else \
+      python -m pip install --no-cache-dir .; \
+    fi
 COPY manage.py ./
 RUN python manage.py collectstatic --noinput
 

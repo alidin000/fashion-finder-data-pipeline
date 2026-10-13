@@ -51,6 +51,11 @@ def _config() -> tuple[Database, Path | None]:
     ) if policy else None
 
 
+def _image_model_path() -> Path | None:
+    configured = os.environ.get("FASHION_FINDER_IMAGE_MODEL_PATH")
+    return Path(configured) if configured else None
+
+
 def _error(detail: str, status: int) -> JsonResponse:
     return JsonResponse({"detail": detail}, status=status)
 
@@ -70,7 +75,9 @@ def health(request):
         if os.environ.get("FASHION_FINDER_DEMO_MODE") == "1":
             image_search_available = demo_index_ready(database, load_policies(policy_path))
         elif os.environ.get("FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT") == "1":
-            image_search_available = image_index_ready(database, load_policies(policy_path))
+            image_search_available = image_index_ready(
+                database, load_policies(policy_path), model_path=_image_model_path()
+            )
     return JsonResponse(
         {
             "status": "ok",
@@ -189,7 +196,9 @@ def search_image(request):
                 else:
                     available = os.environ.get(
                         "FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT"
-                    ) == "1" and image_index_ready(database, policies)
+                    ) == "1" and image_index_ready(
+                        database, policies, model_path=_image_model_path()
+                    )
                 if not available:
                     return _error("image search is not configured", 503)
                 try:
@@ -205,6 +214,7 @@ def search_image(request):
                     }
                     if not demo_mode:
                         options["source"] = request.POST.get("source") or None
+                        options["model_path"] = _image_model_path()
                     result = search_images(
                         database,
                         policies,

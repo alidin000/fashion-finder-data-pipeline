@@ -88,6 +88,7 @@ def evaluate_rankings(
     path: Path,
     *,
     now: datetime | None = None,
+    model_path: Path | None = None,
 ) -> dict:
     """Measure actual local rankings against independent, consented labels."""
     _validate_category(category)
@@ -107,7 +108,9 @@ def evaluate_rankings(
         raise ValueError("task input references must be unique")
     if any(task.category != category for task in tasks):
         raise ValueError("all tasks must use the selected category")
-    if any(task.photo_path for task in tasks) and not image_index_ready(database, policies):
+    if any(task.photo_path for task in tasks) and not image_index_ready(
+        database, policies, model_path=model_path
+    ):
         raise ValueError("no current permitted image index is available")
 
     current = now or datetime.now(UTC)
@@ -155,7 +158,9 @@ def evaluate_rankings(
         if task.photo_path:
             started = perf_counter()
             with _local_photo(root, task.photo_path) as photo:
-                photo_items = search_indexed_image(database, policies, photo, **filters)["items"]
+                photo_items = search_indexed_image(
+                    database, policies, photo, model_path=model_path, **filters
+                )["items"]
             photo_ms = round((perf_counter() - started) * 1000, 2)
             photo_top5 = sum(item["id"] in relevant for item in photo_items)
             photo_latencies.append(photo_ms)

@@ -13,6 +13,7 @@ x-api-base: &api-base
     FASHION_FINDER_CORS_ORIGINS: http://localhost:${FASHION_FINDER_WEB_PORT:-3000},http://127.0.0.1:${FASHION_FINDER_WEB_PORT:-3000}
     FASHION_FINDER_ANALYTICS_ENABLED: ${FASHION_FINDER_ANALYTICS_ENABLED:-0}
     FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT: ${FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT:-0}
+    FASHION_FINDER_IMAGE_MODEL_PATH: ${FASHION_FINDER_IMAGE_MODEL_PATH:-}
 
 services:
   migrate:
@@ -25,6 +26,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        FASHION_FINDER_INSTALL_IMAGE_MODEL: ${FASHION_FINDER_INSTALL_IMAGE_MODEL:-0}
     depends_on:
       migrate:
         condition: service_completed_successfully

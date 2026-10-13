@@ -13,7 +13,7 @@ The [synthetic local demo](local-demo.md) is excluded from these gates.
 | Catalogue coverage | Open | At least 100 current, public-eligible offers per source in the chosen category. |
 | Manual audit | Open | 30 current reviewed offers per source, with correct HUF price, category, Hungarian link, and truthful availability/size. |
 | Shopper tasks | Open | Exactly 30 consented tasks; at least 24 with three useful current options across two approved shops. [Replay the ranking code](task-evaluation-guide.md#replay-the-ranking-code) after labels are collected. |
-| Photo search | Open | The [local indexer](local-image-index.md) handles operator-supplied files and runtime policy checks, and `evaluate-rankings` computes a same-task comparison. It still needs actual permitted retailer images, a validated encoder, and real labels. Keep public capability unavailable until measured. |
+| Photo search | Open | The [local indexer](local-image-index.md) handles operator-supplied files, a checksum-pinned optional ViT encoder, and runtime policy/version checks. `evaluate-rankings` computes a same-task comparison. It still needs actual permitted retailer images and real labels to validate the encoder. Keep public capability unavailable until measured. |
 | Live smoke | Open | An approved feed imported in the deployed environment, a working API and browser flow, and one opened retailer link. Record command, location, and result. |
 | Private beta | Open | 10–20 invited participants, a named source-failure owner, monitoring, and a rollback rehearsal. |
 

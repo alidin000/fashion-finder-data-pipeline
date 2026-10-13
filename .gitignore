@@ -22,6 +22,7 @@ data/evaluation/**
 data/partner/**
 data/research/**
 data/demo/**
+data/models/**
 data/*.sqlite
 data/*.db
 data/source-policies*.json

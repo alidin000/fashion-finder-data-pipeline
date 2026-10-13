@@ -82,6 +82,14 @@ search, one browser search/upload flow, and one live Hungarian retailer link
 from the environment that runs the stack. Record the command, location, and
 observed result. A synthetic local offer does not satisfy that live smoke test.
 
+For the optional pretrained photo-search experiment, follow the pinned model
+download and checksum instructions in the [image-index guide](local-image-index.md).
+Set `FASHION_FINDER_INSTALL_IMAGE_MODEL=1` and the in-container
+`FASHION_FINDER_IMAGE_MODEL_PATH=/data/models/vit-base-patch32-224-in21k-int8.onnx`
+before rebuilding. The same model path must be used to create the image index.
+Keep the experiment flag at `0` until the index, source policy, and task labels
+are ready.
+
 To collect low-cardinality analytics, set `FASHION_FINDER_ANALYTICS_ENABLED=1`
 in `.env` and recreate the services. The browser then sends only search type,
 filter use, result count (stored as a bucket), source of a retailer click, and coarse error

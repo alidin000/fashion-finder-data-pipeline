@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .public_catalogue import _public_offer, _safe_image_url, _visible
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
-from .visual_features import FEATURE_LENGTH, FEATURE_VERSION, feature_distance, image_features
+from .visual_encoder import ImageEncoder, get_encoder
 
 INDEX_FILE = "product-image-index.json"
 INDEX_VERSION = 1
@@ -36,7 +36,7 @@ class ImageManifestEntry(BaseModel):
     image_path: str = Field(min_length=1, max_length=500)
 
 
-def _read_image(path: Path) -> tuple[bytes, list[float]]:
+def _read_image(path: Path, encoder: ImageEncoder) -> tuple[bytes, list[float]]:
     if path.stat().st_size > MAX_IMAGE_BYTES:
         raise ValueError(f"image exceeds 5 MB: {path.name}")
     data = path.read_bytes()
@@ -49,7 +49,7 @@ def _read_image(path: Path) -> tuple[bytes, list[float]]:
             if image.width * image.height > MAX_IMAGE_PIXELS:
                 raise ValueError(f"image dimensions are too large: {path.name}")
             image.load()
-            return data, image_features(image)
+            return data, encoder.encode(image)
     except (UnidentifiedImageError, OSError) as exc:
         raise ValueError(f"cannot decode image: {path.name}") from exc
 
@@ -58,8 +58,11 @@ def build_image_index(
     database: Database,
     policies: dict[tuple[str, str], SourcePolicy],
     manifest_path: Path,
+    *,
+    model_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate every entry, then atomically replace the local descriptor index."""
+    encoder = get_encoder(model_path)
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ENTRIES:
         raise ValueError(f"manifest must contain 1–{MAX_ENTRIES} image entries")
@@ -92,7 +95,7 @@ def build_image_index(
         image_path = (root / relative).resolve()
         if not image_path.is_relative_to(root) or not image_path.is_file():
             raise ValueError(f"entry {number}: image path is outside the manifest directory")
-        data, features = _read_image(image_path)
+        data, features = _read_image(image_path, encoder)
         indexed.append(
             {
                 "offer_id": entry.offer_id,
@@ -107,7 +110,7 @@ def build_image_index(
     temporary = destination.with_name(f".{INDEX_FILE}.tmp")
     temporary.write_text(
         json.dumps(
-            {"version": INDEX_VERSION, "feature_version": FEATURE_VERSION, "entries": indexed},
+            {"version": INDEX_VERSION, "feature_version": encoder.version, "entries": indexed},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -116,19 +119,19 @@ def build_image_index(
     return {
         "status": "indexed",
         "indexed_images": len(indexed),
-        "feature_version": FEATURE_VERSION,
+        "feature_version": encoder.version,
         "index_path": str(destination),
         "retailer_rights_verified_by_tool": False,
     }
 
 
-def _load_index(database: Database) -> list[dict[str, Any]]:
+def _load_index(database: Database, encoder: ImageEncoder) -> list[dict[str, Any]]:
     try:
         index = json.loads((database.path.parent / INDEX_FILE).read_text(encoding="utf-8"))
         entries = index["entries"]
         if (
             index["version"] != INDEX_VERSION
-            or index["feature_version"] != FEATURE_VERSION
+            or index["feature_version"] != encoder.version
             or not isinstance(entries, list)
             or not 1 <= len(entries) <= MAX_ENTRIES
         ):
@@ -141,7 +144,7 @@ def _load_index(database: Database) -> list[dict[str, Any]]:
                 or not isinstance(entry["source_key"], str)
                 or not isinstance(entry["policy_version"], str)
                 or not isinstance(values, list)
-                or len(values) != FEATURE_LENGTH
+                or len(values) != encoder.length
                 or any(
                     not isinstance(value, (int, float)) or not math.isfinite(value)
                     for value in values
@@ -201,9 +204,14 @@ def _eligible(
     return matches
 
 
-def image_index_ready(database: Database, policies: dict[tuple[str, str], SourcePolicy]) -> bool:
+def image_index_ready(
+    database: Database,
+    policies: dict[tuple[str, str], SourcePolicy],
+    *,
+    model_path: Path | None = None,
+) -> bool:
     try:
-        return bool(_eligible(database, policies, _load_index(database)))
+        return bool(_eligible(database, policies, _load_index(database, get_encoder(model_path))))
     except ValueError:
         return False
 
@@ -218,12 +226,14 @@ def search_indexed_image(
     colour: str | None = None,
     size: str | None = None,
     max_price: Decimal | None = None,
+    model_path: Path | None = None,
 ) -> dict[str, Any]:
-    query = image_features(image)
+    encoder = get_encoder(model_path)
+    query = encoder.encode(image)
     candidates = _eligible(
         database,
         policies,
-        _load_index(database),
+        _load_index(database, encoder),
         source=source,
         category=category,
         colour=colour,
@@ -232,7 +242,7 @@ def search_indexed_image(
     )
     ranked = sorted(
         (
-            feature_distance(query, entry["features"]),
+            encoder.distance(query, entry["features"]),
             offer["id"],
             offer,
         )

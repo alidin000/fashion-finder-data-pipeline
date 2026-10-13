@@ -98,6 +98,11 @@ IDs and input references; only **exactly 30** can satisfy the text task gate.
   --output data/reports/jackets-replay.json
 ```
 
+If the product-image index was built with the optional pretrained encoder, add
+`--model-path data/models/vit-base-patch32-224-in21k-int8.onnx` or set
+`FASHION_FINDER_IMAGE_MODEL_PATH`. Evaluation rejects an index produced by a
+different encoder version.
+
 The report records the actual ordered text and photo offer IDs for every task,
 current relevant-offer coverage, top-five relevance, and measured local
 latency. It cannot verify consent, label quality, publisher rights, or real
