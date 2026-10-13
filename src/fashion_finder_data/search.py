@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from .storage import Database, offer_rows
+from .text_match import matches_terms, query_terms, row_text
 
 
 def search_catalogue(
@@ -36,13 +37,10 @@ def search_catalogue(
         rows = [row for row in rows if row["source_key"] == source]
     if category:
         rows = [row for row in rows if row["category"] == category]
-    words = (query or "").casefold().split()
+    terms = query_terms(query)
     results = []
     for row in rows:
-        searchable = " ".join(
-            str(row.get(key) or "") for key in ("title", "brand", "description")
-        ).casefold()
-        if any(word not in searchable for word in words):
+        if not matches_terms(terms, row_text(row)):
             continue
         price = Decimal(row["price_amount"]) if row["price_amount"] is not None else None
         if max_price is not None and (price is None or price > max_price):

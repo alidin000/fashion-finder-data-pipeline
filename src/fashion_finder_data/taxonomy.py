@@ -62,12 +62,13 @@ def normalize_category(value: str | None) -> str | None:
     return key if key in CATEGORIES else ALIASES.get(key)
 
 
-def _ascii(value: str) -> str:
+def fold(value: str) -> str:
+    """Casefold and drop accents, so ``Kabát`` and ``kabat`` compare equal."""
     decomposed = unicodedata.normalize("NFKD", value.casefold())
     return "".join(char for char in decomposed if not unicodedata.combining(char))
 
 
-SLUG_ALIASES = {_ascii(alias): category for alias, category in ALIASES.items()}
+SLUG_ALIASES = {fold(alias): category for alias, category in ALIASES.items()}
 
 
 def category_from_slug(slug: str) -> str | None:
@@ -75,5 +76,5 @@ def category_from_slug(slug: str) -> str | None:
 
     ``kabatok-dzsekik`` names two categories and stays unclassified.
     """
-    matches = {SLUG_ALIASES.get(word) for word in _ascii(slug).split("-")} - {None}
+    matches = {SLUG_ALIASES.get(word) for word in fold(slug).split("-")} - {None}
     return matches.pop() if len(matches) == 1 else None

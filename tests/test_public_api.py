@@ -263,6 +263,37 @@ def test_public_queries_filter_approved_source_and_category_in_sql(tmp_path) -> 
         assert not any('FROM "retailer_offer"' in query["sql"] for query in denied_queries)
 
 
+def test_english_colour_and_single_size_match_hungarian_listing(tmp_path) -> None:
+    db_path = tmp_path / "catalog.sqlite"
+    database = open_database(db_path)
+    url = "https://www.reserved.com/hu/hu/kabat-navy-123ab-45c"
+    upsert_offer(
+        database,
+        RetailerOffer(
+            source_key="reserved",
+            source_url=url,
+            canonical_url=url,
+            source_product_id="navy",
+            title="Gyapjúkabát",
+            price_amount=Decimal(42995),
+            currency="HUF",
+            colour_names=["sötétkék"],
+            size_options=["XS/S", "M/L"],
+            source_fetched_at=datetime.now(UTC),
+        ),
+    )
+
+    def found(params: dict) -> list[str]:
+        items = client.get("/api/v1/search", params=params).json()["items"]
+        return [item["source_product_id"] for item in items]
+
+    with ApiRequester(db_path, policy_file(tmp_path)) as client:
+        assert found({"colour": "blue", "size": "M"}) == ["navy"]
+        assert found({"colour": "sotetkek", "q": "coat"}) == ["navy"]
+        assert found({"colour": "black"}) == []
+        assert found({"size": "XL"}) == []
+
+
 def test_bad_legacy_offer_is_hidden_without_breaking_other_results(tmp_path) -> None:
     db_path = tmp_path / "catalog.sqlite"
     database = open_database(db_path)

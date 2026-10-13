@@ -17,6 +17,7 @@ from django.db.models import Q
 from .schema import is_hungarian_source_url
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
+from .text_match import matches_colour, matches_size, matches_terms, query_terms, row_text
 
 
 def _utc(value: str) -> datetime:
@@ -188,6 +189,7 @@ def search_public_catalogue(
     filters = [query, category, colour, size, str(max_price), source, sort]
     fingerprint = hashlib.sha256(json.dumps(filters).encode()).hexdigest()[:16]
     current = now or datetime.now(UTC)
+    terms = query_terms(query)
     matches: list[tuple[dict[str, Any], SourcePolicy]] = []
     for row in _rows(engine, policies, source=source, category=category):
         policy = _visible(row, policies, current)
@@ -202,14 +204,11 @@ def search_public_catalogue(
             continue
         colours = json.loads(row["colour_names"])
         sizes = json.loads(row["size_options"])
-        if colour and not any(colour.casefold() == item.casefold() for item in colours):
+        if colour and not matches_colour(colour, colours):
             continue
-        if size and not any(size.casefold() == item.casefold() for item in sizes):
+        if size and not matches_size(size, sizes):
             continue
-        searchable = " ".join(
-            str(row.get(field) or "") for field in ("title", "brand", "description")
-        ).casefold()
-        if query and any(word not in searchable for word in query.casefold().split()):
+        if not matches_terms(terms, row_text(row)):
             continue
         matches.append((row, policy))
     if sort == "recent":

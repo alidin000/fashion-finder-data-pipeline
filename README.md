@@ -269,6 +269,11 @@ fashion-finder search --query dzseki --max-price 30000 --sort price-asc
 fashion-finder search --category dresses --source reserved --sort recent --limit 10
 ```
 
+Text search ignores accents and also accepts common English clothing and colour words, so
+`black coat`, `fekete kabát` and `fekete kabat` find the same Hungarian listings. It matches title, brand, description, category and colour. The web
+colour filter works the same way (`blue` matches `sötétkék`), and a size such as `M`
+matches a combined size like `M/L`.
+
 Search returns JSONL with source links, prices, category, image URLs, and last-seen time. The default currency is HUF; use `--currency` for another stored currency. Budget comparisons and price sorting use exact decimal values within one currency. Results reflect the last collection, so unknown stock remains `unknown`.
 
 Known English and Hungarian category labels map to shared keys such as `coats`, `jackets`, `dresses`, `sweaters`, and `shirts`. The original label is kept as `source_category`. Unknown labels stay unclassified and appear in quality reports instead of being guessed. Opening an older SQLite database adds `source_category` and maps its existing category values once.

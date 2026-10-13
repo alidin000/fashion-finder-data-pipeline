@@ -102,6 +102,50 @@ def test_search_filters_text_category_budget_and_currency(tmp_path: Path) -> Non
     ]
 
 
+def test_english_and_unaccented_queries_find_hungarian_listings(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "catalog.sqlite")
+    coat = record(
+        "house",
+        "https://www.housebrand.com/hu/hu/steppelt-kabat-774kf-mlc",
+        "COAT",
+        "Steppelt kapucnis kabát",
+        "24995",
+        "HUF",
+        None,
+    )
+    coat.product["colours"] = ["fekete"]
+    dress = record(
+        "house",
+        "https://www.housebrand.com/hu/hu/kek-ruha-511kf-55x",
+        "DRESS",
+        "Kék ruha",
+        "14995",
+        "HUF",
+        "dresses",
+    )
+    denim = record(
+        "house",
+        "https://www.housebrand.com/hu/hu/farmerdzseki-622kf-55j",
+        "DENIM",
+        "Farmerdzseki",
+        "19995",
+        "HUF",
+        None,
+    )
+    ingest_records(engine, tmp_path, "house", [coat, dress, denim])
+
+    def found(query: str) -> list[str]:
+        return [item["source_product_id"] for item in search_catalogue(engine, query=query)]
+
+    assert found("black coat") == ["COAT"]  # colour and title are Hungarian
+    assert found("kabat") == ["COAT"]  # accents are optional
+    assert found("dresses") == ["DRESS"]  # English category key
+    assert found("blue") == ["DRESS"]
+    assert found("red coat") == []
+    assert found("denim jacket") == ["DENIM"]
+    assert found("jeans") == []  # "farmer" alone also names denim jackets
+
+
 def test_search_rejects_invalid_budget(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "catalog.sqlite")
     with pytest.raises(ValueError, match="nonnegative"):
