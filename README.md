@@ -6,9 +6,10 @@ Next.js shopper interface. The first usable flow is **text and filter search**
 over offers that a source policy permits the app to publish.
 
 The repository is a working **local prototype**, not a public shopping service.
-The default source policy publishes no offers. Photo upload has a real preview,
-but visual matching remains unavailable until product-image rights, an image
-index, and real-user evaluation are in place.
+The default source policy publishes no offers. Photo upload has a real preview.
+The isolated demo compares five CC0 images by coarse colour and layout; real
+retailer photo search still needs image rights, an image index, and real-user
+evaluation.
 
 ## What it looks like
 
@@ -33,8 +34,9 @@ coverage or grant permission to use retailer images.
    state. Unknown stock is shown as unconfirmed. Similarity never implies an
    identical item: unverified results are labeled **Style inspiration**.
 4. Open the offer on the Hungarian retailer website to confirm final details.
-5. Select a JPEG, PNG, or WebP photo and see a local preview. The app explains
-   that visual matching is unavailable instead of showing invented matches.
+5. Select a JPEG, PNG, or WebP photo and see a local preview. In the isolated
+   demo, compare it with five CC0 sample images. The regular app reports photo
+   matching as unavailable until an approved image catalogue exists.
 
 No account, checkout, delivery estimate, stock guarantee, or price alert is
 implemented. Search results come from stored catalogue data; a shopper request
@@ -77,7 +79,7 @@ flowchart LR
 | `GET /api/v1/health` | Service status, latest catalogue timestamp, photo capability, analytics setting, and local demo mode. |
 | `GET /api/v1/search` | Eligible offers with text, filters, sort, limit, and cursor. |
 | `GET /api/v1/offers/{id}` | One current, permitted offer or 404. |
-| `POST /api/v1/search/image` | Validates an uploaded image; currently returns 503 for matching. |
+| `POST /api/v1/search/image` | Validates an uploaded image and matches against five local demo images when demo mode is enabled; otherwise returns 503. |
 | `POST /api/v1/events` | Records coarse daily metrics only when analytics is enabled. |
 
 ### Where the code lives

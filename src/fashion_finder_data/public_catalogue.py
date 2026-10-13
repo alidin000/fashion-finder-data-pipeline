@@ -74,6 +74,14 @@ def _visible(
 
 
 def _public_offer(row: dict[str, Any], policy: SourcePolicy) -> dict[str, Any]:
+    demo_image = (
+        f"/api/v1/demo/images/{row['source_product_id']}"
+        if row["source_key"] == "demo"
+        and os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
+        and policy.allow_image_display
+        and row["image_urls"] != "[]"
+        else None
+    )
     return {
         "id": row["id"],
         "source_key": row["source_key"],
@@ -83,9 +91,13 @@ def _public_offer(row: dict[str, Any], policy: SourcePolicy) -> dict[str, Any]:
         "price_amount": row["price_amount"],
         "currency": row["currency"],
         "source_url": row["source_url"],
-        "image_urls": [url for url in json.loads(row["image_urls"]) if _safe_image_url(url)]
-        if policy.allow_image_display
-        else [],
+        "image_urls": [demo_image]
+        if demo_image
+        else (
+            [url for url in json.loads(row["image_urls"]) if _safe_image_url(url)]
+            if policy.allow_image_display and row["source_key"] != "demo"
+            else []
+        ),
         "colour_names": json.loads(row["colour_names"]),
         "size_options": json.loads(row["size_options"]),
         "availability_status": row["availability_status"],

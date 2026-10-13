@@ -157,6 +157,10 @@ export default function Home() {
     let responseStatus: number | null = null;
     const data = new FormData();
     data.append("file", photo);
+    if (category) data.append("category", category);
+    if (colour.trim()) data.append("colour", colour.trim());
+    if (size.trim()) data.append("size", size.trim());
+    if (maxPrice) data.append("max_price", maxPrice);
     try {
       const response = await fetch(`${API_BASE}/api/v1/search/image`, {
         method: "POST",
@@ -180,7 +184,7 @@ export default function Home() {
       setStatus("ready");
       lastSearchType.current = "photo";
       sendMetric(searchEvent("photo", Boolean(category || colour || size || maxPrice || source), result.items.length));
-      setPhotoMessage("Showing visually similar offers below.");
+      setPhotoMessage(demoMode ? "Showing visual matches from five CC0 sample images. Results are style inspiration, not verified products." : "Showing visually similar offers below.");
     } catch {
       setPhotoMessage("The API is unavailable. Start it locally and try again.");
       sendMetric(errorEvent("photo", responseStatus));
@@ -228,7 +232,7 @@ export default function Home() {
                 <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>
-            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>Preview your photo here. Visual matching opens when approved product images are available.</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} /><div className="photo-preview">{preview ? <img src={preview} alt="Your selected clothing photo" /> : <span>Your preview appears here</span>}</div>{photo && <button className="photo-search" type="button" onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message" role="status">{photoMessage}</p>}</div>
+            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : "Preview your photo here. Visual matching opens when approved product images are available."}</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} /><div className="photo-preview">{preview ? <img src={preview} alt="Your selected clothing photo" /> : <span>Your preview appears here</span>}</div>{photo && <button className="photo-search" type="button" onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message" role="status">{photoMessage}</p>}</div>
           </div>
         </section>
 
@@ -241,7 +245,7 @@ export default function Home() {
           {items.length > 0 && <div className="offer-grid">{items.map((item) => <article className="offer-card" key={item.id}><div className="offer-image">{item.image_urls[0] ? <img src={item.image_urls[0]} alt={item.title} loading="lazy" /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}<span className="match-pill">{matchName(item.match_type)}</span></div><div className="offer-info"><span className="offer-source">{sourceName(item.source_key)}</span><h3>{item.title}</h3><div className="offer-bottom"><strong>{formatHuf(item.price_amount)}</strong>{item.source_key === "demo" ? <span className="demo-item-label">Sample item</span> : <a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => sendMetric(clickEvent(lastSearchType.current, item.source_key))} aria-label={`Open ${item.title} at ${sourceName(item.source_key)}`}>View item <span aria-hidden>↗</span></a>}</div><p className="offer-meta">Checked {new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeZone: "Europe/Budapest" }).format(new Date(item.last_checked_at))} · Stock {item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ")}</p>{item.attribution && <p className="offer-meta">{item.attribution}</p>}</div></article>)}</div>}
           {status === "ready" && nextCursor && <button className="load-more" type="button" onClick={() => void search(nextCursor)}>Load more finds ↓</button>}
         </section>
-        <footer><span>FASHION FINDER</span><p>{demoMode ? "Local demo uses synthetic items and prices; photo matching remains unavailable." : "Prices and availability are checked at the time shown. Final details are on the retailer website."}</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
+        <footer><span>FASHION FINDER</span><p>{demoMode ? "Local demo uses synthetic offers and prices; photo search compares five CC0 examples and cannot verify product identity." : "Prices and availability are checked at the time shown. Final details are on the retailer website."}</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
       </div>
     </main>
   );

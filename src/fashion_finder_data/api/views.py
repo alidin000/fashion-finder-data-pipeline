@@ -12,12 +12,13 @@ from io import BytesIO
 from pathlib import Path
 
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from PIL import Image, UnidentifiedImageError
 
 from fashion_finder_data.analytics import record_metric
 from fashion_finder_data.catalogue.models import RetailerOffer
+from fashion_finder_data.demo_images import demo_image_bytes, demo_index_ready, search_demo_image
 from fashion_finder_data.public_catalogue import public_offer, search_public_catalogue
 from fashion_finder_data.source_policy import load_policies
 from fashion_finder_data.storage import Database
@@ -56,7 +57,7 @@ def _error(detail: str, status: int) -> JsonResponse:
 def health(request):
     if request.method != "GET":
         return _error("method not allowed", 405)
-    database, _ = _config()
+    database, policy_path = _config()
     checked = (
         RetailerOffer.objects.using(database.alias)
         .order_by("-source_fetched_at")
@@ -67,7 +68,14 @@ def health(request):
         {
             "status": "ok",
             "catalogue_timestamp": checked,
-            "image_search": "unavailable",
+            "image_search": (
+                "available"
+                if os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
+                and policy_path is not None
+                and policy_path.is_file()
+                and demo_index_ready(database, load_policies(policy_path))
+                else "unavailable"
+            ),
             "analytics_enabled": os.environ.get("FASHION_FINDER_ANALYTICS_ENABLED") == "1",
             "demo_mode": os.environ.get("FASHION_FINDER_DEMO_MODE") == "1",
         }
@@ -141,6 +149,9 @@ def offer(request, offer_id: int):
 def search_image(request):
     if request.method != "POST":
         return _error("method not allowed", 405)
+    for key, maximum in {"category": 80, "colour": 80, "size": 40, "max_price": 40}.items():
+        if len(request.POST.get(key, "")) > maximum:
+            return _error(f"{key} is too long", 400)
     file = request.FILES.get("file")
     if file is None:
         return _error("file required", 400)
@@ -162,6 +173,30 @@ def search_image(request):
                 if image.width * image.height > MAX_IMAGE_PIXELS:
                     return _error("image dimensions are too large", 413)
                 image.load()
+                database, policy_path = _config()
+                if (
+                    os.environ.get("FASHION_FINDER_DEMO_MODE") != "1"
+                    or policy_path is None
+                    or not policy_path.is_file()
+                    or not demo_index_ready(database, (policies := load_policies(policy_path)))
+                ):
+                    return _error("image search is not configured", 503)
+                try:
+                    budget = (
+                        Decimal(request.POST["max_price"]) if "max_price" in request.POST else None
+                    )
+                    result = search_demo_image(
+                        database,
+                        policies,
+                        image,
+                        category=request.POST.get("category") or None,
+                        colour=request.POST.get("colour") or None,
+                        size=request.POST.get("size") or None,
+                        max_price=budget,
+                    )
+                except (InvalidOperation, ValueError) as exc:
+                    return _error(str(exc), 400)
+                return JsonResponse(result)
     except (
         UnidentifiedImageError,
         OSError,
@@ -170,3 +205,20 @@ def search_image(request):
     ):
         return _error("cannot decode image", 422)
     return _error("image search is not configured", 503)
+
+
+def demo_image(request, sku: str):
+    if request.method != "GET":
+        return _error("method not allowed", 405)
+    database, policy_path = _config()
+    if (
+        os.environ.get("FASHION_FINDER_DEMO_MODE") != "1"
+        or policy_path is None
+        or not policy_path.is_file()
+        or not demo_index_ready(database, load_policies(policy_path))
+    ):
+        return _error("image unavailable", 404)
+    data = demo_image_bytes(sku)
+    if data is None:
+        return _error("image unavailable", 404)
+    return FileResponse(BytesIO(data), content_type="image/jpeg")
