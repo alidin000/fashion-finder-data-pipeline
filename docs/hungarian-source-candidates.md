@@ -5,6 +5,10 @@ interviews. These are
 **candidates**, not approved sources or evidence that their current feeds meet
 the 100-offer threshold.
 
+For the wider October 2026 survey of networks (Dognet, Tradedoubler, CJ, Awin) and
+of shops selling in Hungary, see [affiliate feeds](data-research/affiliate-feeds.md)
+and the [shop survey](data-research/hungarian-shop-survey.md).
+
 | Source | Public feed evidence | Access path |
 | --- | --- | --- |
 | ABOUT YOU Hungary | [VIVnetworks program](https://www.vivnetworks.com/hu/affiliate-katalog/aboutyouhu/) advertises an XML product feed. | Join the ABOUT YOU program through a CJ publisher account. |

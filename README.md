@@ -162,7 +162,10 @@ Private task inputs stay outside Git; the report excludes queries and photos.
 
 See the [source and licence review](docs/source-review.md),
 [live source checks](docs/live-source-status.md), and
-[remaining source decisions](docs/remaining-roadmap-decisions.md).
+[remaining source decisions](docs/remaining-roadmap-decisions.md). The
+[data research and plan](docs/data-research/README.md) sizes the working shops,
+surveys new Hungarian shops, compares affiliate feed routes and lists licence-safe
+test datasets.
 
 ## Ingestion pipeline in detail
 
