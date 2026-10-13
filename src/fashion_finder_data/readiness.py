@@ -8,9 +8,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .collectors import SOURCES
 from .public_catalogue import _safe_image_url, _visible
 from .source_policy import SourcePolicy
+from .sources import SOURCES
 from .storage import Database, offer_rows
 from .taxonomy import CATEGORIES
 

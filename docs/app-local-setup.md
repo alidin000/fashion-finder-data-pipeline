@@ -81,7 +81,7 @@ Open `http://localhost:3000`. The search form calls the API without crawling ret
 
 Run the local release-readiness report after choosing a launch category. It counts
 stored offers and offers currently eligible for the public API under the supplied
-policy and each source's freshness window. The four supported source keys appear
+policy and each source's freshness window. The six supported source keys appear
 even when they have no offers. The text threshold is two approved sources with
 at least 100 eligible offers each. The photo threshold additionally requires
 declared display and processing permission and 100 HTTPS image candidates per

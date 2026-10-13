@@ -55,7 +55,7 @@ flowchart LR
 
 - **Collection:** Scrapy can run small, robots-aware retailer checks. An
   authorized CSV feed can instead enter through `import-feed`. The scheduled
-  worker watches timestamped CSV files for the four configured sources and
+  worker watches timestamped CSV files for six configured source keys and
   imports changed files outside shopper requests.
 - **Storage:** The pipeline preserves raw JSONL, normalizes records, deduplicates
   by source product ID or URL, and records price changes and run errors in
@@ -143,8 +143,9 @@ in the report.
   need JavaScript. It does not guarantee access to a blocked storefront.
 - **Crawlee:** compared with Scrapy on a local fixture; it is not required at
   runtime.
-- **Feeds:** local authorized CSV imports are supported for the four configured
-  sources. ABOUT YOU and Answear feeds are candidates, not wired importers yet.
+- **Feeds:** local CSV imports support all six source keys. ABOUT YOU and
+  Answear are feed-only candidates with a dry-run validator; publisher access,
+  mapping from the actual partner feed, and rights remain pending.
 
 See the [source and licence review](docs/source-review.md),
 [live source checks](docs/live-source-status.md), and
@@ -276,6 +277,7 @@ If a retailer provides an authorized product export, import a local CSV:
 
 ```powershell
 fashion-finder import-feed zara path/to/authorized-products.csv
+fashion-finder validate-feed aboutyou path/to/mapped-aboutyou.csv
 ```
 
 The CSV needs `product_url,name,price,currency` headers. Optional headers are
@@ -284,8 +286,10 @@ Use one product per row, a full HTTPS URL on that retailer's Hungarian storefron
 and `HUF` prices. The command reads a local file; it does not fetch a feed URL or
 grant permission to collect retailer content. Valid rows enter the same raw archive,
 database, exports, and run report as web collection. Invalid rows are counted and
-reported; a partial import exits nonzero. This path is ready for supplied feeds,
-but no Zara, H&M, or Pull&Bear feed has been provided or verified.
+reported; a partial import exits nonzero. Scheduled feeds and `validate-feed`
+also require `observed_at` with a timezone. The dry-run validator writes no
+database or raw archive. No partner feed for the candidate sources has been
+provided or verified; see the [onboarding steps](docs/hungarian-source-candidates.md).
 
 The first category page only is sampled; pagination and full-catalogue coverage are not implemented. The limit is 1–100 product offers per source across all starting URLs, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
 

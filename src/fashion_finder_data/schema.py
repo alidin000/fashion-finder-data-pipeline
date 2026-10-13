@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .sources import is_hungarian_source_url
 from .taxonomy import normalize_category
 
 
@@ -33,27 +34,6 @@ def canonical_url(value: str) -> str:
     )
     path = parts.path.rstrip("/") or "/"
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
-
-
-def is_hungarian_source_url(source_key: str, value: str) -> bool:
-    """Confirm that a public product link stays on its Hungarian retailer host."""
-    expected = {
-        "zara": "zara.com",
-        "hm": "hm.com",
-        "reserved": "reserved.com",
-        "pullandbear": "pullandbear.com",
-    }.get(source_key)
-    if expected is None:
-        return False
-    parts = urlsplit(value)
-    host = parts.hostname or ""
-    return (
-        parts.scheme.lower() == "https"
-        and not parts.username
-        and not parts.password
-        and (host == expected or host.endswith("." + expected))
-        and parts.path.startswith(("/hu/", "/hu_hu/"))
-    )
 
 
 def parse_money(value: Any, currency: str | None = None) -> Decimal | None:
@@ -83,7 +63,7 @@ def parse_money(value: Any, currency: str | None = None) -> Decimal | None:
 
 
 class RawProductRecord(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear"]
+    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear"]
     market_code: Literal["HU"] = "HU"
     source_url: str
     fetched_at: datetime = Field(default_factory=utc_now)
@@ -98,7 +78,7 @@ class RawProductRecord(BaseModel):
 
 
 class RetailerOffer(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear"]
+    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear"]
     market_code: Literal["HU"] = "HU"
     source_product_id: str | None = None
     source_url: str

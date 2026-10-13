@@ -21,7 +21,9 @@ class MetricEvent(BaseModel):
     search_type: Literal["text", "photo"]
     filtered: bool = False
     result_count: int | None = Field(default=None, ge=0, le=10000)
-    source_key: Literal["zara", "hm", "reserved", "pullandbear"] | None = None
+    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear"] | None = (
+        None
+    )
     error_code: Literal["http_4xx", "http_5xx", "network", "other"] | None = None
 
     @model_validator(mode="after")

@@ -14,14 +14,14 @@ from urllib.parse import urljoin
 from playwright.sync_api import TimeoutError as BrowserTimeout
 from playwright.sync_api import sync_playwright
 
-from fashion_finder_data.collectors import SOURCES, allowed_url
+from fashion_finder_data.sources import CRAWL_SOURCES, allowed_url
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", choices=SOURCES)
+    parser.add_argument("source", choices=CRAWL_SOURCES)
     args = parser.parse_args()
-    source = SOURCES[args.source]
+    source = CRAWL_SOURCES[args.source]
     result = {"source": source.key, "url": source.category_url}
     try:
         with sync_playwright() as playwright:

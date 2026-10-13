@@ -19,7 +19,7 @@ The CLI continues other sources when one fails. Each source gets its own run rep
 
 The current collector samples the first category page and product pages only. It does not paginate, infer unavailable stock, download photos, or cover every product. Four configured adapters are not four verified live collectors.
 
-An `import-feed` command can ingest a local, authorized product CSV for any of the four sources. It has no feed credentials or live feed integration. A successful feed import does not establish that the corresponding web collector works.
+An `import-feed` command can ingest a local, authorized product CSV for any of the six source keys. ABOUT YOU and Answear are feed-only candidates, with no supplied partner feed or permission. The command has no feed credentials or live feed integration. A successful feed import does not establish that the corresponding web collector works.
 
 The read-only `recheck` command now lists stale offers for direct review. The [source-specific removal policy](remaining-roadmap-decisions.md#removal-and-stock-policy) does not turn missing sample results or blocked requests into unavailable stock.
 

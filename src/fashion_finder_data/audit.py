@@ -7,10 +7,10 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .collectors import SOURCES
 from .public_catalogue import _visible
 from .readiness import AUDIT_FIELDS, AUDIT_TARGET, _safe_csv_cell, _validate_category
 from .source_policy import SourcePolicy
+from .sources import SOURCES
 from .storage import Database, offer_rows
 
 VERDICT_FIELDS = (

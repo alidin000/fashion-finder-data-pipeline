@@ -15,50 +15,12 @@ from scrapy.http import Response
 from scrapy_playwright.page import PageMethod
 
 from .schema import RawProductRecord, utc_now
-
-
-@dataclass(frozen=True)
-class Source:
-    key: str
-    host: str
-    category_url: str
-    category: str | None
-    product_pattern: str
-    card_selector: str | None = None
-
-
-# Category pages are public storefront URLs. Parsers must be verified against live HTML.
-SOURCES = {
-    "zara": Source(
-        "zara",
-        "zara.com",
-        "https://www.zara.com/hu/en/woman-jackets-l1114.html",
-        "jackets",
-        r"-p\d+\.html(?:$|\?)",
-    ),
-    "hm": Source(
-        "hm",
-        "hm.com",
-        "https://www2.hm.com/hu_hu/noi/vasarlas-termek-szerint/dzsekik/dzsekik.html",
-        "jackets",
-        r"productpage\.\d+\.html(?:$|\?)",
-    ),
-    "reserved": Source(
-        "reserved",
-        "reserved.com",
-        "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok",
-        "coats",
-        r"/hu/hu/[^/]+-[a-z0-9]{3,}-[a-z0-9]{2,}$",
-        "article.es-product a.es-product-photo::attr(href)",
-    ),
-    "pullandbear": Source(
-        "pullandbear",
-        "pullandbear.com",
-        "https://www.pullandbear.com/hu/noi/ruhazat/bluzok-es-ingek-n6525",
-        "shirts",
-        r"-p\d+\.html(?:$|\?)",
-    ),
-}
+from .sources import (
+    CRAWL_SOURCES,
+    SOURCES,  # noqa: F401 - compatibility for existing callers
+    Source,
+    allowed_url,
+)
 
 RESERVED_CATEGORIES = {
     "/hu/hu/noi/ruhazat/kabatok": "coats",
@@ -78,27 +40,11 @@ def source_for_page(source: Source, url: str) -> Source:
     return replace(source, category=None)
 
 
-def allowed_url(source: Source, value: str) -> bool:
-    try:
-        parts = urlsplit(value)
-        port = parts.port
-    except ValueError:
-        return False
-    host = (parts.hostname or "").lower()
-    if (
-        parts.scheme != "https"
-        or parts.username
-        or parts.password
-        or port not in (None, 443)
-        or not (host == source.host or host.endswith("." + source.host))
-    ):
-        return False
-    return parts.path.startswith("/hu/") or parts.path.startswith("/hu_hu/")
-
-
 def product_links(
     response: Response, source: Source, limit: int, excluded: set[str] | None = None
 ) -> list[str]:
+    if source.product_pattern is None:
+        raise ValueError("feed-only sources have no page parser")
     if source.card_selector:
         candidates = response.css(source.card_selector).getall()
     else:
@@ -302,6 +248,8 @@ class ProductSpider(scrapy.Spider):
 
     def start_requests(self):
         for source in self.sources:
+            if source.category_url is None or source.product_pattern is None:
+                raise ValueError("feed-only sources cannot be crawled")
             urls = self.overrides.get(source.key, [source.category_url])
             for url in urls:
                 if not allowed_url(source, url):
@@ -339,6 +287,8 @@ class ProductSpider(scrapy.Spider):
         self.state.error(source, f"request failed: {type(failure.value).__name__}{status}{suffix}")
 
     def parse_page(self, response: Response, source: Source):
+        if source.product_pattern is None:
+            raise ValueError("feed-only sources have no page parser")
         source = source_for_page(source, response.url)
         requested_url = response.request.url if response.request else response.url
         is_product_url = any(
@@ -408,6 +358,8 @@ def crawl(
     browser: bool = False,
     browser_wait_ms: int = 1500,
 ) -> CrawlState:
+    if any(source.key not in CRAWL_SOURCES for source in sources):
+        raise ValueError("feed-only sources cannot be crawled")
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
     if not 0 <= browser_wait_ms <= 10000:

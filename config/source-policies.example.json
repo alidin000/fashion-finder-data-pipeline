@@ -11,5 +11,31 @@
     "attribution": null,
     "freshness_hours": 72,
     "policy_version": "1"
+  },
+  {
+    "source_key": "aboutyou",
+    "market_code": "HU",
+    "approval_status": "pending",
+    "evidence_ref": null,
+    "access_method": null,
+    "allow_public_listing": false,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": null,
+    "freshness_hours": 72,
+    "policy_version": "1"
+  },
+  {
+    "source_key": "answear",
+    "market_code": "HU",
+    "approval_status": "pending",
+    "evidence_ref": null,
+    "access_method": null,
+    "allow_public_listing": false,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": null,
+    "freshness_hours": 72,
+    "policy_version": "1"
   }
 ]

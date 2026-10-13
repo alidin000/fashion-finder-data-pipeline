@@ -10,9 +10,9 @@ from pathlib import Path
 
 from . import __version__
 from .audit import audit_report
-from .collectors import SOURCES, crawl
+from .collectors import crawl
 from .evaluation import evaluate_tasks
-from .feed import import_feed
+from .feed import import_feed, validate_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
 from .readiness import readiness_report, write_audit_sample
@@ -20,6 +20,7 @@ from .removal import recheck_report
 from .schema import utc_now
 from .search import search_catalogue
 from .source_policy import load_policies
+from .sources import CRAWL_SOURCES, SOURCES
 from .storage import export_catalogue, load_run, open_database
 
 
@@ -32,7 +33,7 @@ def make_parser() -> argparse.ArgumentParser:
     sources.add_argument("action", choices=["list"])
     commands.add_parser("migrate", help="Adopt or upgrade the local SQLite catalogue for Django")
     collect = commands.add_parser("collect", help="Collect a bounded product sample")
-    collect.add_argument("source", choices=[*SOURCES, "all"])
+    collect.add_argument("source", choices=[*CRAWL_SOURCES, "all"])
     collect.add_argument(
         "--limit", type=int, default=5, help="Maximum product offers per source (1–100)"
     )
@@ -54,6 +55,9 @@ def make_parser() -> argparse.ArgumentParser:
     feed = commands.add_parser("import-feed", help="Import an authorized local product CSV")
     feed.add_argument("source", choices=SOURCES)
     feed.add_argument("path", type=Path)
+    validate = commands.add_parser("validate-feed", help="Check a feed without storing data")
+    validate.add_argument("source", choices=SOURCES)
+    validate.add_argument("path", type=Path)
     export = commands.add_parser("export", help="Export the stored catalogue")
     export.add_argument("path", type=Path)
     export.add_argument("--source", choices=SOURCES)
@@ -124,8 +128,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "sources":
         for source in SOURCES.values():
-            print(f"{source.key}\tHU\t{source.category_url}")
+            print(f"{source.key}\tHU\t{source.category_url or 'feed-only'}")
         return 0
+    if args.command == "validate-feed":
+        try:
+            result = validate_feed(args.path, args.source)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] == "valid" else 1
     if args.command == "collect":
         if not 1 <= args.limit <= 100:
             parser.error("--limit must be between 1 and 100")
@@ -138,7 +149,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Migrated {engine.path}")
         return 0
     if args.command == "collect":
-        selected = list(SOURCES.values()) if args.source == "all" else [SOURCES[args.source]]
+        selected = (
+            list(CRAWL_SOURCES.values()) if args.source == "all" else [CRAWL_SOURCES[args.source]]
+        )
         started_at = utc_now().isoformat()
         state = crawl(
             selected,

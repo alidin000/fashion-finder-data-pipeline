@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .collectors import SOURCES, allowed_url
 from .schema import canonical_url, utc_now
+from .sources import SOURCES, allowed_url
 from .storage import Database, offer_rows
 
 

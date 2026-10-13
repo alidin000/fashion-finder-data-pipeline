@@ -32,8 +32,10 @@ each hour. No browser scraping runs inside the stack.
 
 ## Approved feed refresh
 
-Only `data/feeds/<source>.csv` for `zara`, `hm`, `reserved`, or `pullandbear` is
-watched. The source policy must be `approved`, include a private `evidence_ref`,
+Only `data/feeds/<source>.csv` for `zara`, `hm`, `reserved`, `pullandbear`,
+`aboutyou`, or `answear` is watched. ABOUT YOU and Answear are feed-only
+candidates; [onboarding details](hungarian-source-candidates.md) cover the
+required publisher access and CSV mapping. The source policy must be `approved`, include a private `evidence_ref`,
 and set `access_method` to `feed-csv`. Approval in a JSON file is a declaration;
 the software cannot verify the agreement. Public listing and each image use
 must be granted separately.
@@ -49,6 +51,10 @@ The worker imports changed file content once and does not refresh timestamps
 from an unchanged file. A partial import stays visible as a failed run for
 review; fix the feed and replace the file. Collector errors do not mark stock
 as sold out.
+
+Before delivery, run `fashion-finder validate-feed <source> <path>` on the
+mapped CSV. This dry run requires timestamps, checks every row, and stores
+nothing. Approval and image rights still require separate human evidence.
 
 ```bash
 docker compose logs --tail=50 worker

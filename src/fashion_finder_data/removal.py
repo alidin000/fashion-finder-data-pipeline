@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .collectors import SOURCES, allowed_url
 from .schema import utc_now
+from .sources import SOURCES, allowed_url
 from .storage import Database, offer_rows
 
 SOURCE_POLICY = {
@@ -34,6 +34,18 @@ SOURCE_POLICY = {
     },
     "pullandbear": {
         "web_evidence": "none verified",
+        "missing_from_sample": "recheck",
+        "http_403_429_5xx": "recheck",
+        "http_404_410": "manual_review",
+    },
+    "aboutyou": {
+        "web_evidence": "none verified; feed observations require partner access",
+        "missing_from_sample": "recheck",
+        "http_403_429_5xx": "recheck",
+        "http_404_410": "manual_review",
+    },
+    "answear": {
+        "web_evidence": "none verified; feed observations require partner access",
         "missing_from_sample": "recheck",
         "http_403_429_5xx": "recheck",
         "http_404_410": "manual_review",
@@ -91,7 +103,9 @@ def recheck_report(
                 "reason": reason,
                 "action": "manual_review"
                 if not valid_url or timestamp_problem
-                else "direct_recheck",
+                else "direct_recheck"
+                if source and source.crawl_enabled
+                else "manual_review",
             }
         )
     candidates.sort(key=lambda item: (item["source_key"], item["last_seen_at"] or ""))

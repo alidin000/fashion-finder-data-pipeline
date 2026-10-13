@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class SourcePolicy(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear"]
+    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear"]
     market_code: Literal["HU"] = "HU"
     approval_status: Literal["pending", "approved", "revoked"] = "pending"
     evidence_ref: str | None = None

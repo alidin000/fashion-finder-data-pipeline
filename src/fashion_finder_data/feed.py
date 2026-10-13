@@ -6,25 +6,26 @@ import csv
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .collectors import SOURCES, allowed_url
 from .pipeline import ingest_records
-from .schema import RawProductRecord, utc_now
+from .schema import RawProductRecord, normalize, utc_now
+from .sources import SOURCES, allowed_url
 from .storage import Database
 
 REQUIRED_COLUMNS = {"product_url", "name", "price", "currency"}
+MAX_FEED_BYTES = 20 * 1024 * 1024
 
 
-def import_feed(
-    engine: Database,
-    root: Path,
+def _read_feed(
     path: Path,
     source_key: str,
     *,
-    require_observed_at: bool = False,
-) -> dict:
-    """Import a local, authorized CSV; reject bad rows without losing good ones."""
+    require_observed_at: bool,
+) -> tuple[list[tuple[int, RawProductRecord]], list[str], int]:
+    """Parse one canonical CSV without changing persistent state."""
     source = SOURCES[source_key]
-    records: list[RawProductRecord] = []
+    if path.stat().st_size > MAX_FEED_BYTES:
+        raise ValueError("feed exceeds the 20 MB limit")
+    records: list[tuple[int, RawProductRecord]] = []
     errors: list[str] = []
     discovered = 0
     with path.open("r", encoding="utf-8-sig", newline="") as stream:
@@ -79,24 +80,65 @@ def import_feed(
                 "availability": row.get("availability"),
             }
             records.append(
-                RawProductRecord(
-                    source_key=source_key,
-                    market_code="HU",
-                    source_url=url,
-                    fetched_at=fetched_at,
-                    adapter_version=(
-                        "feed-csv-v2"
-                        if "observed_at" in (reader.fieldnames or [])
-                        else "feed-csv-v1"
+                (
+                    number,
+                    RawProductRecord(
+                        source_key=source_key,
+                        market_code="HU",
+                        source_url=url,
+                        fetched_at=fetched_at,
+                        adapter_version=(
+                            "feed-csv-v2"
+                            if "observed_at" in (reader.fieldnames or [])
+                            else "feed-csv-v1"
+                        ),
+                        product=product,
                     ),
-                    product=product,
                 )
             )
+    return records, errors, discovered
+
+
+def validate_feed(path: Path, source_key: str) -> dict:
+    """Check a timestamped canonical feed without importing or approving it."""
+    records, errors, discovered = _read_feed(path, source_key, require_observed_at=True)
+    valid = 0
+    for number, record in records:
+        try:
+            offer = normalize(record)
+            if offer.price_amount is None or offer.currency != "HUF":
+                raise ValueError("HUF price is required")
+        except (TypeError, ValueError) as exc:
+            errors.append(f"feed row {number}: {exc}")
+        else:
+            valid += 1
+    return {
+        "source_key": source_key,
+        "status": "valid" if valid > 0 and not errors else "invalid",
+        "records_discovered": discovered,
+        "records_valid": valid,
+        "records_rejected": discovered - valid,
+        "errors": errors[:20],
+    }
+
+
+def import_feed(
+    engine: Database,
+    root: Path,
+    path: Path,
+    source_key: str,
+    *,
+    require_observed_at: bool = False,
+) -> dict:
+    """Import a local, authorized CSV; reject bad rows without losing good ones."""
+    numbered, errors, discovered = _read_feed(
+        path, source_key, require_observed_at=require_observed_at
+    )
     return ingest_records(
         engine,
         root,
         source_key,
-        records,
+        [record for _, record in numbered],
         errors,
         discovered=discovered,
         preparse_rejected=len(errors),

@@ -9,12 +9,10 @@ import os
 import time
 from pathlib import Path
 
-from .collectors import SOURCES
-from .feed import import_feed
+from .feed import MAX_FEED_BYTES, import_feed
 from .source_policy import load_policies
+from .sources import SOURCES
 from .storage import Database, open_database
-
-MAX_FEED_BYTES = 20 * 1024 * 1024
 
 
 def _load_state(path: Path) -> dict[str, str]:

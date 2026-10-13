@@ -34,8 +34,8 @@ function formatHuf(amount: string) {
 }
 
 function sourceName(key: string) {
-  return { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved" }[
-    key as "hm" | "pullandbear" | "zara" | "reserved"
+  return { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", aboutyou: "ABOUT YOU", answear: "Answear" }[
+    key as "hm" | "pullandbear" | "zara" | "reserved" | "aboutyou" | "answear"
   ] ?? key;
 }
 
@@ -220,7 +220,7 @@ export default function Home() {
                 <label>Colour<input value={colour} onChange={(event) => setColour(event.target.value)} placeholder="Any colour" /></label>
                 <label>Maximum price · Ft<input type="number" min="0" step="1" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="No limit" /></label>
                 <label>Size<input value={size} onChange={(event) => setSize(event.target.value)} placeholder="Any size" /></label>
-                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">All approved shops</option><option value="reserved">Reserved</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option></select></label>
+                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">All approved shops</option><option value="reserved">Reserved</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></select></label>
                 <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>
