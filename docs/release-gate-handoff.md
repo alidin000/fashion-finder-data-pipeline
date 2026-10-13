@@ -12,8 +12,8 @@ The [synthetic local demo](local-demo.md) is excluded from these gates.
 | Two source permissions | Open | Approval and terms for two Hungarian sources, including listing, links, attribution, and each image use. See [partner handoff](partner-access-handoff.md). |
 | Catalogue coverage | Open | At least 100 current, public-eligible offers per source in the chosen category. |
 | Manual audit | Open | 30 current reviewed offers per source, with correct HUF price, category, Hungarian link, and truthful availability/size. |
-| Shopper tasks | Open | Exactly 30 consented tasks; at least 24 with three useful current options across two approved shops. |
-| Photo search | Open | The [local indexer](local-image-index.md) handles operator-supplied files and runtime policy checks, but still needs actual permitted retailer images, a validated encoder, and a same-task relevance comparison. Keep public capability unavailable until measured. |
+| Shopper tasks | Open | Exactly 30 consented tasks; at least 24 with three useful current options across two approved shops. [Replay the ranking code](task-evaluation-guide.md#replay-the-ranking-code) after labels are collected. |
+| Photo search | Open | The [local indexer](local-image-index.md) handles operator-supplied files and runtime policy checks, and `evaluate-rankings` computes a same-task comparison. It still needs actual permitted retailer images, a validated encoder, and real labels. Keep public capability unavailable until measured. |
 | Live smoke | Open | An approved feed imported in the deployed environment, a working API and browser flow, and one opened retailer link. Record command, location, and result. |
 | Private beta | Open | 10–20 invited participants, a named source-failure owner, monitoring, and a rollback rehearsal. |
 
@@ -24,6 +24,7 @@ fashion-finder --data-dir data readiness --category jackets --policy data/source
 fashion-finder --data-dir data audit-sample --category jackets --source aboutyou --policy data/source-policies.json --output data/audits/aboutyou-jackets.csv
 fashion-finder --data-dir data audit-report data/audits/aboutyou-jackets.csv data/audits/answear-jackets.csv --category jackets --policy data/source-policies.json
 fashion-finder --data-dir data evaluate-tasks data/evaluation/jackets.json --category jackets --policy data/source-policies.json
+fashion-finder --data-dir data evaluate-rankings data/evaluation/jackets-replay.json --category jackets --policy data/source-policies.json
 ```
 
 Replace `jackets`, source names, and file paths after the category and sources

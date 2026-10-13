@@ -53,3 +53,53 @@ release threshold; review the measured tradeoff before enabling photo search.
 Usefulness, consent, and retailer permission are human assertions. The tool
 checks offer freshness and declared policy, but cannot verify those assertions
 or create the 30 real tasks.
+
+## Replay the ranking code
+
+`evaluate-tasks` above scores manually recorded result IDs. For reproducible
+ranking evidence, use `evaluate-rankings` with independent relevance labels.
+This command actually runs the current text search and, when a local permitted
+image index exists, the current photo search. It applies the same category,
+colour, size, and HUF budget to both. It measures local processing time; browser
+and network latency require a separate deployed smoke test.
+
+Keep this input under ignored `data/evaluation/`. It contains private query
+text and a relative path to a consented photo. The output includes result IDs
+and aggregate measures, but never echoes the query, photo path, or consent
+reference. Use a copy of the catalogue that the worker is not updating.
+
+```json
+[
+  {
+    "task_id": "task-001",
+    "consent_ref": "private/consent/001",
+    "input_ref": "private/task-input/001",
+    "category": "jackets",
+    "query": "brown jacket",
+    "colour": "Brown",
+    "size": "M",
+    "max_price": "15000",
+    "photo_path": "photos/task-001.jpg",
+    "relevant_offer_ids": [12, 43, 55]
+  }
+]
+```
+
+The offer IDs are human relevance labels, not claimed search results. Omit
+`photo_path` for a text-only task. A photo path must stay inside the task-file
+directory. The command rejects absent, invalid, oversized, or unpermitted
+photos and will not fetch a photo URL. The task file needs 1–30 distinct task
+IDs and input references; only **exactly 30** can satisfy the text task gate.
+
+```bash
+.venv/bin/fashion-finder --data-dir data evaluate-rankings \
+  data/evaluation/jackets-replay.json --category jackets \
+  --policy data/source-policies.json \
+  --output data/reports/jackets-replay.json
+```
+
+The report records the actual ordered text and photo offer IDs for every task,
+current relevant-offer coverage, top-five relevance, and measured local
+latency. It cannot verify consent, label quality, publisher rights, or real
+shopper usefulness. Review those inputs before using the report for a release
+decision.

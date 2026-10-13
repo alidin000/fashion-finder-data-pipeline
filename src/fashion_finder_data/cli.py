@@ -17,6 +17,7 @@ from .feed_mapping import map_xml_feed
 from .image_index import build_image_index
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
+from .ranking_evaluation import evaluate_rankings
 from .readiness import readiness_report, write_audit_sample
 from .removal import recheck_report
 from .schema import utc_now
@@ -127,6 +128,15 @@ def make_parser() -> argparse.ArgumentParser:
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
     evaluation.add_argument("--output", type=Path, help="Create a JSON report file")
+    rankings = commands.add_parser(
+        "evaluate-rankings", help="Replay private tasks against local text and image search"
+    )
+    rankings.add_argument("path", type=Path)
+    rankings.add_argument("--category", required=True)
+    rankings.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    rankings.add_argument("--output", type=Path, help="Create a JSON report file")
     images = commands.add_parser(
         "index-images", help="Build a local image-search experiment from permitted files"
     )
@@ -282,7 +292,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    if args.command in {"readiness", "audit-sample", "audit-report", "evaluate-tasks"}:
+    if args.command in {
+        "readiness",
+        "audit-sample",
+        "audit-report",
+        "evaluate-tasks",
+        "evaluate-rankings",
+    }:
         try:
             policies = load_policies(args.policy)
             if args.command == "readiness":
@@ -300,11 +316,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"Wrote {count} audit offers to {args.output}")
             else:
-                result = (
-                    audit_report(engine, policies, args.category, args.paths)
-                    if args.command == "audit-report"
-                    else evaluate_tasks(engine, policies, args.category, args.path)
-                )
+                if args.command == "audit-report":
+                    result = audit_report(engine, policies, args.category, args.paths)
+                elif args.command == "evaluate-tasks":
+                    result = evaluate_tasks(engine, policies, args.category, args.path)
+                else:
+                    result = evaluate_rankings(engine, policies, args.category, args.path)
                 body = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
                 if args.output:
                     args.output.parent.mkdir(parents=True, exist_ok=True)

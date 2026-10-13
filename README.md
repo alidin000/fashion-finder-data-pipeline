@@ -142,8 +142,8 @@ tracks the implemented work and open gates. The [release handoff](docs/release-g
 lists the exact outstanding evidence. The [partner access handoff](docs/partner-access-handoff.md)
 and [shopper research handoff](docs/shopper-research-handoff.md) provide the
 operator steps. The [task evaluation guide](docs/task-evaluation-guide.md)
-describes how to record real-user results without saving queries or photos in
-the report.
+describes how to record real-user results and replay text/photo rankings.
+Private task inputs stay outside Git; the report excludes queries and photos.
 
 ## Collection tools and source status
 
