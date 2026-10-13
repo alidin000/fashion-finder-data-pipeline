@@ -13,6 +13,7 @@ from .audit import audit_report
 from .collectors import crawl
 from .evaluation import evaluate_tasks
 from .feed import import_feed, validate_feed
+from .feed_mapping import map_xml_feed
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
 from .readiness import readiness_report, write_audit_sample
@@ -58,6 +59,14 @@ def make_parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate-feed", help="Check a feed without storing data")
     validate.add_argument("source", choices=SOURCES)
     validate.add_argument("path", type=Path)
+    mapping = commands.add_parser("map-xml-feed", help="Map a local XML export to feed CSV")
+    mapping.add_argument("source", choices=SOURCES)
+    mapping.add_argument("xml_path", type=Path)
+    mapping.add_argument("mapping_path", type=Path)
+    mapping.add_argument("output_path", type=Path)
+    mapping.add_argument(
+        "--observed-at", help="ISO 8601 download time with timezone if XML has no timestamp"
+    )
     export = commands.add_parser("export", help="Export the stored catalogue")
     export.add_argument("path", type=Path)
     export.add_argument("--source", choices=SOURCES)
@@ -137,6 +146,19 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] == "valid" else 1
+    if args.command == "map-xml-feed":
+        try:
+            result = map_xml_feed(
+                args.source,
+                args.xml_path,
+                args.mapping_path,
+                args.output_path,
+                observed_at=args.observed_at,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "collect":
         if not 1 <= args.limit <= 100:
             parser.error("--limit must be between 1 and 100")

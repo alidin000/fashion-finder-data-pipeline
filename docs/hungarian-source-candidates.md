@@ -24,8 +24,46 @@ under `https://aboutyou.hu/p/`, `https://www.aboutyou.hu/p/`,
 `collect` and browser diagnostics do not crawl them. The scheduled worker can
 watch `data/feeds/aboutyou.csv` and `data/feeds/answear.csv`, but it blocks each
 file until its source policy is approved with `access_method: "feed-csv"`.
-There is no CJ downloader or XML-to-CSV mapping because no account access or
-sample feed has been supplied.
+There is no CJ downloader or retailer-specific field map because no account
+access or sample feed has been supplied. A generic local XML mapper is now
+available; its field paths must be set from the actual authorized export.
+
+## Convert a downloaded XML file
+
+Create a private JSON mapping after inspecting the export. This **synthetic**
+example assumes `<product>` records with `<link>`, `<title>`, and `<price>`
+children; these are not verified ABOUT YOU or Answear field names:
+
+```json
+{
+  "record_tag": "product",
+  "fields": {
+    "product_url": "link",
+    "name": "title",
+    "price": "price"
+  },
+  "constants": {"currency": "HUF"}
+}
+```
+
+Field paths use `/` for nested elements and `@name` for an attribute, for
+example `price/@currency`. XML namespace prefixes are ignored. The first
+matching child is used for each path; inspect feeds with multiple images,
+prices, or variants before choosing a mapping. Keep the raw XML and the real
+mapping file outside Git. Unpack compressed downloads before using this tool.
+
+```bash
+fashion-finder map-xml-feed aboutyou path/to/download.xml path/to/mapping.json path/to/aboutyou.csv --observed-at <ISO-8601-download-time>
+fashion-finder validate-feed aboutyou path/to/aboutyou.csv
+```
+
+Use a timezone-aware download timestamp only when the export has no observation
+field. If it does, map `observed_at` from the XML and omit `--observed-at`.
+Conversion reads local files only, accepts XML up to 20 MB, rejects XML entity
+declarations, validates every output row, and never overwrites an existing CSV.
+It creates no database or policy approval. Do not place the output in
+`data/feeds/` until its fields, source terms, and sampled links have been
+reviewed. Treat mapped CSV as untrusted data; do not open it in a spreadsheet.
 
 After obtaining a permitted feed and mapping it to the canonical CSV, check it
 without writing data:
@@ -52,8 +90,9 @@ used. It does not create a database, archive, or source approval.
 2. Download a small feed sample using the publisher account. Keep credentials,
    feed URLs, and raw exports outside Git.
 3. Inspect its actual fields, currency, market URLs, image links, availability,
-   and categories. Implement and test a mapping to the pipeline's timestamped
-   CSV format. Use the feed's observation time only if it is supplied; otherwise
+   and categories. Write a field mapping for the local XML converter and test it
+   against the pipeline's timestamped CSV format. Use the feed's observation
+   time only if it is supplied; otherwise
    record the download time as the observation time. `product_url` must be the
    direct Hungarian product page; keep any permitted affiliate tracking link
    separate until the offer model and link rules are reviewed.

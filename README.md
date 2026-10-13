@@ -144,8 +144,9 @@ in the report.
 - **Crawlee:** compared with Scrapy on a local fixture; it is not required at
   runtime.
 - **Feeds:** local CSV imports support all six source keys. ABOUT YOU and
-  Answear are feed-only candidates with a dry-run validator; publisher access,
-  mapping from the actual partner feed, and rights remain pending.
+  Answear are feed-only candidates with a dry-run validator and configurable
+  local XML-to-CSV conversion; publisher access, the actual field mapping, and
+  rights remain pending.
 
 See the [source and licence review](docs/source-review.md),
 [live source checks](docs/live-source-status.md), and
@@ -278,6 +279,7 @@ If a retailer provides an authorized product export, import a local CSV:
 ```powershell
 fashion-finder import-feed zara path/to/authorized-products.csv
 fashion-finder validate-feed aboutyou path/to/mapped-aboutyou.csv
+fashion-finder map-xml-feed aboutyou path/to/download.xml path/to/mapping.json path/to/mapped-aboutyou.csv --observed-at <ISO-8601-download-time>
 ```
 
 The CSV needs `product_url,name,price,currency` headers. Optional headers are
