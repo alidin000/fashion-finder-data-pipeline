@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 from decimal import Decimal
 
 import pytest
 
 from fashion_finder_data.demo_images import demo_image_bytes
 from fashion_finder_data.image_index import build_image_index
-from fashion_finder_data.ranking_evaluation import evaluate_rankings
+from fashion_finder_data.ranking_evaluation import evaluate_rankings, ranking_metrics
 from fashion_finder_data.schema import RetailerOffer, utc_now
 from fashion_finder_data.source_policy import SourcePolicy
 from fashion_finder_data.storage import offer_rows, open_database, upsert_offer
@@ -149,3 +150,13 @@ def test_replay_cannot_count_demo_mode_as_release_evidence(tmp_path, monkeypatch
     monkeypatch.setenv("FASHION_FINDER_DEMO_MODE", "1")
     with pytest.raises(ValueError, match="cannot run in demo mode"):
         evaluate_rankings(database, policies, "jackets", task_path)
+
+
+def test_ranking_metrics_reward_relevant_results_near_the_top() -> None:
+    second = ranking_metrics([7, 3, 9], {3})
+    assert second["hit_at_5"] == 1.0
+    assert second["mrr_at_10"] == 0.5
+    assert second["ndcg_at_10"] == pytest.approx(1 / math.log2(3))
+    sixth = ranking_metrics([1, 2, 4, 5, 6, 3], {3})
+    assert (sixth["hit_at_5"], sixth["mrr_at_10"]) == (0.0, pytest.approx(1 / 6))
+    assert ranking_metrics([1, 2], {3}) == {"hit_at_5": 0.0, "mrr_at_10": 0.0, "ndcg_at_10": 0.0}

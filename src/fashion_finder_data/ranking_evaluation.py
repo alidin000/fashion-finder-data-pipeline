@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import warnings
 from datetime import UTC, datetime
@@ -88,8 +89,35 @@ def _local_photo(root: Path, relative_name: str) -> Image.Image:
         raise ValueError("cannot decode task photo") from exc
 
 
+MAX_TASKS = 100  # 30 for the release gate; more give model comparisons more power
+
+
 def _mean(values: list[int]) -> float | None:
     return round(mean(values), 2) if values else None
+
+
+def ranking_metrics(result_ids: list[int], relevant: set[int]) -> dict[str, float]:
+    """Hit@5, reciprocal rank within the top 10, and binary nDCG@10 for one task."""
+    top = result_ids[:10]
+    first = next((rank for rank, offer_id in enumerate(top, 1) if offer_id in relevant), None)
+    gain = sum(
+        1 / math.log2(rank + 1) for rank, offer_id in enumerate(top, 1) if offer_id in relevant
+    )
+    ideal = sum(1 / math.log2(rank + 1) for rank in range(1, min(len(relevant), 10) + 1))
+    return {
+        "hit_at_5": float(first is not None and first <= 5),
+        "mrr_at_10": 1 / first if first else 0.0,
+        "ndcg_at_10": gain / ideal if ideal else 0.0,
+    }
+
+
+def _summary(per_task: list[dict[str, float]]) -> dict[str, float | int] | None:
+    if not per_task:
+        return None
+    return {
+        "tasks": len(per_task),
+        **{key: round(mean(item[key] for item in per_task), 3) for key in per_task[0]},
+    }
 
 
 def evaluate_rankings(
@@ -113,8 +141,8 @@ def evaluate_rankings(
     if os.environ.get("FASHION_FINDER_DEMO_MODE") == "1":
         raise ValueError("ranking evaluation cannot run in demo mode")
     raw = json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 30:
-        raise ValueError("ranking evaluation requires 1–30 tasks")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_TASKS:
+        raise ValueError(f"ranking evaluation requires 1–{MAX_TASKS} tasks")
     try:
         tasks = [RankingTask.model_validate(item) for item in raw]
     except ValidationError as exc:
@@ -150,6 +178,17 @@ def evaluate_rankings(
     text_top5_scores = []
     look_scores = []
     text_top5_on_look = []
+    metrics: dict[str, list[dict[str, float]]] = {
+        name: []
+        for name in (
+            "text",
+            "photo",
+            "photo_any_category",
+            "photo_any_category_without_vote",
+            "look",
+            "text_on_look_tasks",
+        )
+    }
     for task in tasks:
         relevant = {
             offer_id
@@ -166,8 +205,17 @@ def evaluate_rankings(
         }
         started = perf_counter()
         text_items = search_public_catalogue(
-            database, policies, query=task.query, limit=20, now=current, **filters
+            database,
+            policies,
+            query=task.query,
+            limit=20,
+            now=current,
+            # The shopper page sorts a typed query by best match.
+            sort="relevance" if task.query.strip() else "price-asc",
+            **filters,
         )["items"]
+        text_ids = [item["id"] for item in text_items]
+        metrics["text"].append(ranking_metrics(text_ids, relevant))
         text_ms = round((perf_counter() - started) * 1000, 2)
         text_latencies.append(text_ms)
         useful = [item for item in text_items if item["id"] in relevant]
@@ -205,6 +253,12 @@ def evaluate_rankings(
                     **any_category,
                 )["items"]
             photo_top5 = sum(item["id"] in relevant for item in photo_items)
+            for name, items in (
+                ("photo", photo_items),
+                ("photo_any_category", voted),
+                ("photo_any_category_without_vote", plain),
+            ):
+                metrics[name].append(ranking_metrics([item["id"] for item in items], relevant))
             photo_latencies.append(photo_ms)
             photo_scores.append(photo_top5)
             photo_vote_scores.append(sum(item["id"] in relevant for item in voted))
@@ -224,8 +278,10 @@ def evaluate_rankings(
             look_items = search_indexed_text(
                 database, policies, task.query, **text_models, **filters
             )["items"]
-            look_scores.append(sum(item["id"] in relevant for item in look_items))
+            look_scores.append(sum(item["id"] in relevant for item in look_items[:5]))
             text_top5_on_look.append(text_top5)
+            metrics["look"].append(ranking_metrics([item["id"] for item in look_items], relevant))
+            metrics["text_on_look_tasks"].append(metrics["text"][-1])
             outcome.update(
                 {
                     "look_result_ids": [item["id"] for item in look_items],
@@ -234,14 +290,18 @@ def evaluate_rankings(
             )
         outcomes.append(outcome)
     successful = sum(item["text_success"] for item in outcomes)
+    # The gate is 24 of 30 tasks; larger comparison sets keep the same 80 % share.
+    required_successful = math.ceil(0.8 * max(len(tasks), 30))
     return {
         "category": category,
         "measured_at": current.isoformat(),
         "submitted_tasks": len(tasks),
         "required_tasks": 30,
         "tasks_with_three_current_options_from_two_sources": successful,
-        "required_successful_tasks": 24,
-        "text_task_gate_met": len(tasks) == 30 and successful >= 24,
+        "required_successful_tasks": required_successful,
+        "text_task_gate_met": len(tasks) >= 30 and successful >= required_successful,
+        # Hit@5, MRR@10 and nDCG@10 per search mode; photo search returns 5 results.
+        "metrics": {name: _summary(values) for name, values in metrics.items()},
         "text_latency_median_ms": median(text_latencies),
         "photo_tasks_evaluated": len(photo_scores),
         "photo_top5_relevant_mean": round(mean(photo_scores), 2) if photo_scores else None,

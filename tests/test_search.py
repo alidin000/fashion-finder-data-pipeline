@@ -146,6 +146,55 @@ def test_english_and_unaccented_queries_find_hungarian_listings(tmp_path: Path) 
     assert found("jeans") == []  # "farmer" alone also names denim jackets
 
 
+def test_whole_words_avoid_false_hits_and_hungarian_finds_english(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "catalog.sqlite")
+    reserved = [
+        ("redozott-szoknya-111aa-45c", "PLEAT", "Redőzött szoknya", "skirts"),
+        ("bagolymintas-polo-222bb-45c", "OWL", "Bagolymintás póló", None),
+        ("gyapjukabat-333cc-45c", "WOOL", "Gyapjúkabát", None),
+        ("kabat-444dd-45c", "PLAIN", "Kabát", None),
+    ]
+    ingest_records(
+        engine,
+        tmp_path,
+        "reserved",
+        [
+            record(
+                "reserved", f"https://www.reserved.com/hu/hu/{slug}", sku, title, "9995", "HUF", cat
+            )
+            for slug, sku, title, cat in reserved
+        ],
+    )
+    ingest_records(
+        engine,
+        tmp_path,
+        "zara",
+        [
+            record(
+                "zara",
+                "https://www.zara.com/hu/en/black-coat-p123.html",
+                "ZARA",
+                "Black coat",
+                "29995",
+                "HUF",
+                None,
+            )
+        ],
+    )
+
+    def found(query: str, sort: str = "price-asc") -> list[str]:
+        return [
+            item["source_product_id"] for item in search_catalogue(engine, query=query, sort=sort)
+        ]
+
+    assert found("red") == []  # not "Redőzött" (pleated)
+    assert found("bag") == []  # not "Bagolymintás" (owl print)
+    assert "ZARA" in found("fekete kabát")  # Hungarian query, English title
+    # Exact title words (Hungarian "Kabát", translated "coat") rank above a compound
+    # that only ends in the word; equal scores fall back to price.
+    assert found("kabát", sort="relevance") == ["PLAIN", "ZARA", "WOOL"]
+
+
 def test_search_rejects_invalid_budget(tmp_path: Path) -> None:
     engine = open_database(tmp_path / "catalog.sqlite")
     with pytest.raises(ValueError, match="nonnegative"):

@@ -25,6 +25,7 @@ from fashion_finder_data.image_index import (
 from fashion_finder_data.schema import RetailerOffer, utc_now
 from fashion_finder_data.source_policy import SourcePolicy
 from fashion_finder_data.storage import offer_rows, open_database, upsert_offer
+from fashion_finder_data.text_match import english_query
 from fashion_finder_data.visual_encoder import (
     COLOUR_LAYOUT,
     FASHION_SIGLIP_SPACE,
@@ -71,7 +72,8 @@ class ColourWords:
     length = 3
 
     def encode(self, text: str) -> list[float]:
-        return unit([float(channel) for channel in COLOURS[canonical_text(text).split()[0]]])
+        colour = COLOURS.get(canonical_text(text).split()[0], COLOURS["red"])
+        return unit([float(channel) for channel in colour])
 
 
 def stand_in_text_encoder(model_path, tokenizer_path) -> ColourWords:
@@ -129,6 +131,22 @@ def test_description_ranks_indexed_photos_by_look(catalogue) -> None:
         search_indexed_text(catalogue, policies, "  ", **paths())
 
 
+def test_look_search_blends_word_relevance_and_translates_hungarian(catalogue) -> None:
+    policies = {("reserved", "HU"): POLICY}
+    # The stand-in model sees "jacket" as red, so by look alone the red dress wins;
+    # the green offer is in the jackets category, so fusion puts it first.
+    blended = search_indexed_text(catalogue, policies, "jacket", **paths())
+    assert blended["items"][0]["source_product_id"] == "green"
+    visual = search_indexed_text(catalogue, policies, "jacket", blend=False, **paths())
+    assert visual["items"][0]["source_product_id"] == "red"
+    # Hungarian colour words reach the English-only model translated.
+    assert (
+        search_indexed_text(catalogue, policies, "kék", **paths())["items"][0]["source_product_id"]
+        == "blue"
+    )
+    assert english_query("Fekete kabátok") == "black coat"
+
+
 def test_text_search_refuses_an_index_from_another_model(catalogue, monkeypatch) -> None:
     monkeypatch.setattr(image_index, "get_encoder", lambda model_path=None: COLOUR_LAYOUT)
     with pytest.raises(ValueError, match="Marqo-FashionSigLIP"):
@@ -160,24 +178,31 @@ def offer(offer_id: int, category: str) -> dict:
 
 def test_category_vote_lists_the_majority_category_first() -> None:
     query = [1.0, 0.0, 0.0]
-    # The closest photo is a bag, but the next four matches are dresses.
-    layout = [("bags", 1.0), *[("dresses", 0.99 - step / 100) for step in range(4)]]
+    # The closest photo is a bag; dresses hold the weighted majority of the rest.
+    layout = ["bags", "dresses", "dresses", "shoes", "dresses", "dresses", "dresses"]
     candidates = [
         (
-            {"features": unpack_features(pack_features(unit([score, 1 - score, 0.0])))},
-            offer(position, category),
+            {"features": unpack_features(pack_features(unit([1 - step / 100, step / 100, 0])))},
+            offer(step + 1, category),
         )
-        for position, (category, score) in enumerate(layout, start=1)
+        for step, category in enumerate(layout)
     ]
     voted = _rank(MeanColour(), query, candidates, consensus=True)
     assert voted["preferred_category"] == "dresses"
-    assert [item["category"] for item in voted["items"]] == ["dresses"] * 4 + ["bags"]
+    # The nearest match stays first; dresses follow; the shoe drops out of the top 5.
+    assert [item["category"] for item in voted["items"]] == ["bags"] + ["dresses"] * 4
     plain = _rank(MeanColour(), query, candidates, consensus=False)
-    assert plain["items"][0]["category"] == "bags"
+    assert [item["category"] for item in plain["items"]] == layout[:5]
     assert "preferred_category" not in plain
 
-    split = candidates[:3]  # bag, dress, dress: no category holds a majority
-    assert _rank(MeanColour(), query, split, consensus=True)["items"][0]["category"] == "bags"
+    # Four different categories: weights 1, 1/2, 1/3, 1/4 leave no majority (1 < 2.08 / 2).
+    split = [
+        (entry, offer(item["id"], category))
+        for (entry, item), category in zip(
+            candidates, ["bags", "dresses", "shoes", "coats"], strict=False
+        )
+    ]
+    assert "preferred_category" not in _rank(MeanColour(), query, split, consensus=True)
 
 
 def test_photo_search_keeps_its_nearest_match_with_the_vote(catalogue) -> None:

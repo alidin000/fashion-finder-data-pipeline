@@ -23,7 +23,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from .public_catalogue import _public_offer, _safe_image_url, _visible
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
-from .text_match import matches_colour, matches_size
+from .text_match import (
+    english_query,
+    matches_colour,
+    matches_size,
+    matches_terms,
+    query_terms,
+    relevance,
+    row_text,
+)
 from .visual_encoder import ImageEncoder, get_encoder, get_text_encoder
 
 INDEX_FILE = "product-image-index.json"
@@ -31,7 +39,9 @@ INDEX_FILE = "product-image-index.json"
 INDEX_VERSION = 2
 MAX_ENTRIES = 20_000
 RESULT_LIMIT = 5
+LOOK_LIMIT = 20
 CONSENSUS_NEIGHBOURS = 20
+RRF_K = 60  # reciprocal rank fusion constant; Elasticsearch's default
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 
@@ -79,6 +89,25 @@ def _read_image(path: Path, encoder: ImageEncoder) -> tuple[bytes, list[float]]:
         raise ValueError(f"cannot decode image: {path.name}") from exc
 
 
+def image_skip_reason(
+    offer: dict[str, Any] | None,
+    image_url: str,
+    policies: dict[tuple[str, str], SourcePolicy],
+    now: datetime,
+) -> str | None:
+    """Why a photo cannot be indexed now, or None; shared by fetching and indexing."""
+    if offer is None or offer["source_key"] == "demo":
+        return "no retailer offer"
+    policy = policies.get((offer["source_key"], offer["market_code"]))
+    if policy is None or not policy.allow_image_display or not policy.allow_image_processing:
+        return "source policy does not permit images"
+    if _visible(offer, policies, now) is None:
+        return "offer is not currently visible (stale, out of stock or unapproved)"
+    if image_url not in json.loads(offer["image_urls"]):
+        return "photo URL is no longer on the offer"
+    return None
+
+
 def build_image_index(
     database: Database,
     policies: dict[tuple[str, str], SourcePolicy],
@@ -86,40 +115,44 @@ def build_image_index(
     *,
     model_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Validate every entry, then atomically replace the local descriptor index."""
+    """Index every eligible manifest photo, then atomically replace the index.
+
+    A malformed or unsafe manifest stops the build. A photo whose offer is no
+    longer eligible is skipped and counted, so one sold-out item cannot block it.
+    """
     encoder = get_encoder(model_path)
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ENTRIES:
         raise ValueError(f"manifest must contain 1–{MAX_ENTRIES} image entries")
     root = manifest_path.resolve().parent
+    entries = [ImageManifestEntry.model_validate(item) for item in raw]
+    offers = {
+        row["id"]: row
+        for row in offer_rows(database, id__in=sorted({entry.offer_id for entry in entries}))
+    }
+    now = datetime.now(UTC)
     indexed = []
     seen = set()
-    for number, item in enumerate(raw, start=1):
-        entry = ImageManifestEntry.model_validate(item)
+    skipped: Counter[str] = Counter()
+    for number, entry in enumerate(entries, start=1):
         key = (entry.offer_id, entry.image_url)
         if key in seen:
             raise ValueError(f"duplicate manifest image at entry {number}")
         seen.add(key)
         if not _safe_image_url(entry.image_url):
             raise ValueError(f"entry {number}: image URL must use HTTPS without credentials")
-        offer = next(iter(offer_rows(database, id=entry.offer_id)), None)
-        if offer is None or offer["source_key"] == "demo":
-            raise ValueError(f"entry {number}: no eligible retailer offer")
-        policy = policies.get((offer["source_key"], offer["market_code"]))
-        if (
-            policy is None
-            or not policy.allow_image_display
-            or not policy.allow_image_processing
-            or _visible(offer, policies, datetime.now(UTC)) is None
-            or entry.image_url not in json.loads(offer["image_urls"])
-        ):
-            raise ValueError(f"entry {number}: image is not permitted on a current offer")
         relative = Path(entry.image_path)
         if relative.is_absolute():
             raise ValueError(f"entry {number}: image path must be relative to the manifest")
         image_path = (root / relative).resolve()
         if not image_path.is_relative_to(root) or not image_path.is_file():
             raise ValueError(f"entry {number}: image path is outside the manifest directory")
+        offer = offers.get(entry.offer_id)
+        reason = image_skip_reason(offer, entry.image_url, policies, now)
+        if reason:
+            skipped[reason] += 1
+            continue
+        policy = policies[(offer["source_key"], offer["market_code"])]
         data, features = _read_image(image_path, encoder)
         indexed.append(
             {
@@ -131,6 +164,8 @@ def build_image_index(
                 "features": pack_features(features),
             }
         )
+    if not indexed:
+        raise ValueError(f"no eligible images to index; skipped: {dict(skipped)}")
     destination = database.path.parent / INDEX_FILE
     temporary = destination.with_name(f".{INDEX_FILE}.tmp")
     temporary.write_text(
@@ -142,19 +177,31 @@ def build_image_index(
     )
     temporary.replace(destination)
     return {
-        "status": "indexed",
+        "status": "indexed" if not skipped else "partial",
         "indexed_images": len(indexed),
+        "skipped_images": dict(skipped),
         "feature_version": encoder.version,
         "index_path": str(destination),
         "retailer_rights_verified_by_tool": False,
     }
 
 
+def _stack(entries: list[dict[str, Any]] | tuple[dict[str, Any], ...], length: int):
+    """One float32 matrix of the entries' embeddings, or None without NumPy."""
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+    return np.frombuffer(
+        b"".join(entry["features"].tobytes() for entry in entries), dtype=np.float32
+    ).reshape(len(entries), length)
+
+
 @lru_cache(maxsize=2)
 def _read_index(
     path: str, inode: int, size: int, modified_ns: int, feature_version: str, length: int
-) -> tuple[dict[str, Any], ...]:
-    """Parse and validate once per index file; a rebuild changes the cache key."""
+) -> tuple[tuple[dict[str, Any], ...], Any]:
+    """Parse, validate and stack once per index file; a rebuild changes the cache key."""
     index = json.loads(Path(path).read_text(encoding="utf-8"))
     entries = index["entries"]
     if (
@@ -177,10 +224,14 @@ def _read_index(
         if len(values) != length or not all(math.isfinite(value) for value in values):
             raise ValueError("image index contains invalid entries")
         entry["features"] = values
-    return tuple(entries)
+    for row, entry in enumerate(entries):
+        entry["_row"] = row  # position in the cached matrix
+    return tuple(entries), _stack(entries, length)
 
 
-def _load_index(database: Database, encoder: ImageEncoder) -> tuple[dict[str, Any], ...]:
+def _load_index(
+    database: Database, encoder: ImageEncoder
+) -> tuple[tuple[dict[str, Any], ...], Any]:
     path = database.path.parent / INDEX_FILE
     try:
         stat = path.stat()
@@ -197,19 +248,24 @@ def _load_index(database: Database, encoder: ImageEncoder) -> tuple[dict[str, An
 
 
 def _distances(
-    encoder: ImageEncoder, query: list[float], entries: list[dict[str, Any]]
+    encoder: ImageEncoder, query: list[float], entries: list[dict[str, Any]], matrix=None
 ) -> list[float]:
-    """Cosine models rank with one matrix product when NumPy is installed."""
+    """Cosine models rank with one matrix product when NumPy is installed.
+
+    With the cached index matrix, one product covers every photo and the candidates
+    pick their rows; otherwise the candidates are stacked for this query.
+    """
     if encoder.cosine and entries:
         try:
             import numpy as np
         except ImportError:
             pass
         else:
-            matrix = np.frombuffer(
-                b"".join(entry["features"].tobytes() for entry in entries), dtype=np.float32
-            ).reshape(len(entries), encoder.length)
-            return (1.0 - matrix @ np.asarray(query, dtype=np.float32)).tolist()
+            vector = np.asarray(query, dtype=np.float32)
+            if matrix is not None and all("_row" in entry for entry in entries):
+                every = 1.0 - matrix @ vector
+                return [float(every[entry["_row"]]) for entry in entries]
+            return (1.0 - _stack(entries, encoder.length) @ vector).tolist()
     return [encoder.distance(query, entry["features"]) for entry in entries]
 
 
@@ -265,10 +321,22 @@ def image_index_ready(
     *,
     model_path: Path | None = None,
 ) -> bool:
+    """Cheap check for health probes: a compatible index and one permitted source.
+
+    Per-offer freshness and policy checks still run on every search.
+    """
     try:
-        return bool(_eligible(database, policies, _load_index(database, get_encoder(model_path))))
+        entries, _ = _load_index(database, get_encoder(model_path))
     except ValueError:
         return False
+    permitted = {
+        key
+        for (key, _market), policy in policies.items()
+        if policy.approval_status == "approved"
+        and policy.allow_image_display
+        and policy.allow_image_processing
+    }
+    return any(entry["source_key"] in permitted for entry in entries)
 
 
 def consensus_category(offers: list[dict[str, Any]]) -> str | None:
@@ -290,29 +358,44 @@ def consensus_category(offers: list[dict[str, Any]]) -> str | None:
     return category if weight > total / 2 else None
 
 
+def _visual_order(
+    encoder: ImageEncoder,
+    query: list[float],
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]],
+    matrix=None,
+) -> list[dict[str, Any]]:
+    """Distinct offers, nearest first; an offer's best photo decides its place."""
+    distances = _distances(encoder, query, [entry for entry, _ in candidates], matrix)
+    order = sorted(range(len(candidates)), key=lambda i: (distances[i], candidates[i][1]["id"]))
+    offers: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for position in order:
+        offer = candidates[position][1]
+        if offer["id"] not in seen:
+            seen.add(offer["id"])
+            offers.append(offer)
+    return offers
+
+
 def _rank(
     encoder: ImageEncoder,
     query: list[float],
     candidates: list[tuple[dict[str, Any], dict[str, Any]]],
     *,
     consensus: bool,
+    matrix=None,
+    limit: int = RESULT_LIMIT,
 ) -> dict[str, Any]:
-    distances = _distances(encoder, query, [entry for entry, _ in candidates])
-    order = sorted(range(len(candidates)), key=lambda i: (distances[i], candidates[i][1]["id"]))
-    offers: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for position in order:
-        offer = candidates[position][1]
-        if offer["id"] not in seen:  # an offer's best photo decides its place
-            seen.add(offer["id"])
-            offers.append(offer)
+    offers = _visual_order(encoder, query, candidates, matrix)
     result: dict[str, Any] = {"items": [], "next_cursor": None}
     preferred = consensus_category(offers) if consensus else None
-    if preferred:
-        # A red-dress photo should list dresses before red bags; the sort is stable.
-        offers.sort(key=lambda offer: offer["category"] != preferred)
+    if preferred and offers:
+        # A red-dress photo should list dresses before red bags, but the single
+        # nearest match always stays first; the sort is stable.
+        rest = sorted(offers[1:], key=lambda offer: offer["category"] != preferred)
+        offers = [offers[0], *rest]
         result["preferred_category"] = preferred
-    result["items"] = offers[:RESULT_LIMIT]
+    result["items"] = offers[:limit]
     return result
 
 
@@ -331,17 +414,18 @@ def search_indexed_image(
 ) -> dict[str, Any]:
     encoder = get_encoder(model_path)
     query = encoder.encode(image)
+    entries, matrix = _load_index(database, encoder)
     candidates = _eligible(
         database,
         policies,
-        _load_index(database, encoder),
+        entries,
         source=source,
         category=category,
         colour=colour,
         size=size,
         max_price=max_price,
     )
-    return _rank(encoder, query, candidates, consensus=consensus)
+    return _rank(encoder, query, candidates, consensus=consensus, matrix=matrix)
 
 
 def _text_encoder_for(
@@ -381,21 +465,46 @@ def search_indexed_text(
     model_path: Path | None = None,
     text_model_path: Path | None = None,
     tokenizer_path: Path | None = None,
-    consensus: bool = True,
+    limit: int = LOOK_LIMIT,
+    blend: bool = True,
 ) -> dict[str, Any]:
-    """Rank indexed product photos by how well they match a description."""
+    """Rank indexed product photos by how well they match a description.
+
+    Hungarian clothing and colour words are translated first, because the model's
+    text tower only understands English. With ``blend``, the visual order is fused
+    with word relevance by reciprocal rank fusion, so an offer whose title names
+    the item ranks above one that merely looks similar.
+    """
     if not text.strip():
         raise ValueError("describe the look to search for")
+    if not 1 <= limit <= 50:
+        raise ValueError("limit must be between 1 and 50")
     image_encoder = get_encoder(model_path)
     text_encoder = _text_encoder_for(image_encoder, text_model_path, tokenizer_path)
+    entries, matrix = _load_index(database, image_encoder)
     candidates = _eligible(
         database,
         policies,
-        _load_index(database, image_encoder),
+        entries,
         source=source,
         category=category,
         colour=colour,
         size=size,
         max_price=max_price,
     )
-    return _rank(image_encoder, text_encoder.encode(text), candidates, consensus=consensus)
+    visual = _visual_order(
+        image_encoder, text_encoder.encode(english_query(text)), candidates, matrix
+    )
+    if not blend:
+        return {"items": visual[:limit], "next_cursor": None}
+    terms = query_terms(text)
+    lexical = sorted(
+        (offer for offer in visual if matches_terms(terms, row_text(offer))),
+        key=lambda offer: -relevance(terms, offer),
+    )
+    scores: dict[int, float] = {}
+    for ranking in (visual, lexical):
+        for position, offer in enumerate(ranking, start=1):
+            scores[offer["id"]] = scores.get(offer["id"], 0.0) + 1 / (RRF_K + position)
+    fused = sorted(visual, key=lambda offer: -scores[offer["id"]])  # stable: ties stay visual
+    return {"items": fused[:limit], "next_cursor": None}

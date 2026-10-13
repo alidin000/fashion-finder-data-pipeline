@@ -58,8 +58,21 @@ DATABASES = {
         "NAME": str(
             Path(os.environ.get("FASHION_FINDER_DB", "data/fashion_finder.sqlite")).resolve()
         ),
+        # The API, analytics and the worker write concurrently. IMMEDIATE takes the
+        # write lock when a transaction starts, so writers wait up to `timeout`
+        # instead of failing at once; WAL lets reads continue during a write.
+        "OPTIONS": {
+            "transaction_mode": "IMMEDIATE",
+            "timeout": 20,
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",
+        },
     }
 }
+# Shopper photos are decoded in memory and never written to disk; larger bodies
+# are rejected by the view before they are parsed.
+FILE_UPLOAD_HANDLERS = ["django.core.files.uploadhandler.MemoryFileUploadHandler"]
+FILE_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_TZ = True

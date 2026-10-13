@@ -85,7 +85,7 @@ def make_parser() -> argparse.ArgumentParser:
     search.add_argument("--max-price", help="Maximum price in the selected currency")
     search.add_argument("--currency", default="HUF", help="Exact currency (default: HUF)")
     search.add_argument(
-        "--sort", choices=["price-asc", "price-desc", "recent"], default="price-asc"
+        "--sort", choices=["price-asc", "price-desc", "recent", "relevance"], default="price-asc"
     )
     search.add_argument("--limit", type=int, default=20, help="Maximum results (1–100)")
     quality = commands.add_parser("quality", help="Report local offer freshness and completeness")
@@ -185,6 +185,9 @@ def make_parser() -> argparse.ArgumentParser:
         "fetch-images", help="Download product photos of stored offers for index-images"
     )
     fetch.add_argument("--source", choices=[key for key in SOURCES if key != "demo"])
+    fetch.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
     fetch.add_argument("--limit", type=int, default=100, help="Maximum offers (1–20000)")
     fetch.add_argument("--per-offer", type=int, default=2, help="Photos per offer (1–8)")
     fetch.add_argument(
@@ -366,9 +369,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "fetch-images":
         try:
+            if args.policy is None:
+                raise ValueError("--policy is required: only indexable photos are fetched")
             result = fetch_images(
                 engine,
                 args.output_dir or args.data_dir / "images",
+                load_policies(args.policy),
                 source=args.source,
                 limit=args.limit,
                 per_offer=args.per_offer,

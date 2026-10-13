@@ -17,19 +17,33 @@ as compact float32 (index version 2) must be rebuilt once.
 ## Download photos with fetch-images
 
 `fetch-images` downloads up to `--per-offer` photos (default 2, usually front and
-back) for each stored active offer, then writes `data/images/manifest.json` in the
-format `index-images` expects. It only accepts HTTPS photos on the retailer's own
-domains, such as `static.sinsay.com`, and follows each image host's `robots.txt`.
-It waits `--delay` seconds (default 2) between requests. A rerun reuses files it
-already has, and drops manifest entries whose offer or photo URL is gone.
+back) for each offer the index would accept, then writes `data/images/manifest.json`
+in the format `index-images` expects. It needs `--policy`: a source must be approved
+with image display and processing allowed, and the offer must be current and in
+stock. The report lists every skipped photo by reason under `skipped_not_eligible`.
+
+Every download:
+- uses only HTTPS photos on the retailer's own domains, such as `static.sinsay.com`,
+  and refuses a redirect that leaves the site;
+- follows the image host's `robots.txt`, parsed with Protego as Scrapy does
+  (RFC 9309 wildcards and longest match);
+- honours text-and-data-mining opt-outs under EU DSM Directive Article 4: a
+  `tdm-reservation: 1` response header, or a reserving rule in
+  `/.well-known/tdmrep.json` on the image host or the shop's own site;
+- waits `--delay` seconds (default 2) between requests.
+
+A rerun reuses files it already has and drops manifest entries the index would no
+longer accept. The run stops before any download if the manifest would pass 20,000
+photos.
 
 ```bash
 .venv/bin/fashion-finder --data-dir data collect sinsay --limit 500
-.venv/bin/fashion-finder --data-dir data fetch-images --source sinsay --limit 500
+.venv/bin/fashion-finder --data-dir data fetch-images --source sinsay --limit 500 \
+  --policy data/source-policies.json
 ```
 
-Collect shortly before indexing: the indexer rejects offers older than the
-source policy's `freshness_hours` (default 72).
+Collect shortly before indexing: offers older than the source policy's
+`freshness_hours` (default 72) are skipped.
 
 ## Prepare the files
 
@@ -54,9 +68,11 @@ source policy's `freshness_hours` (default 72).
 ]
 ```
 
-The image path must stay inside the manifest directory. The indexer rejects
-missing, duplicate, oversized, malformed, unapproved, stale, or mismatched
-entries. It replaces the index only after **all** entries validate.
+The image path must stay inside the manifest directory. A missing file, a duplicate,
+an unsafe path or URL, or an undecodable photo stops the build. An entry whose offer
+is no longer eligible (unapproved, stale, sold out, or with a changed photo URL) is
+skipped and counted under `skipped_images`, and the status becomes `partial`. The
+index is replaced only when at least one photo is indexed.
 
 ## Build and try it
 
@@ -157,8 +173,16 @@ FASHION_FINDER_TOKENIZER_PATH=/data/models/fashion-siglip-tokenizer.json
 
 `GET /api/v1/health` then reports `"text_to_image": "available"`, the search panel
 shows a **Match by look** checkbox, and `GET /api/v1/search/look?q=…` accepts the
-same filters as `/api/v1/search`. Text search refuses an index built with another
-model, because the two embeddings would not be comparable.
+same filters as `/api/v1/search`, plus `limit` (1–50, default 20). Text search
+refuses an index built with another model, because the two embeddings would not be
+comparable.
+
+Two steps make look search work for Hungarian shoppers and titles:
+- Known Hungarian clothing and colour words are translated before embedding, so
+  `fekete kabát` reaches the model as `black coat`. Other words pass through.
+- The visual order is blended with word relevance by reciprocal rank fusion
+  (k = 60). An offer whose title or category names the item ranks above one that
+  only looks similar.
 
 ## Cropping and the category vote
 
@@ -168,9 +192,10 @@ match. **Clear crop** sends the whole photo again.
 
 When the shopper picks no category, the 20 closest offers vote on one, with weights
 1, 1/2, 1/3, and so on, so the nearest matches count most. If one category holds a
-majority, its offers move to the top in their visual order, and the response
-includes `preferred_category`. A red-dress photo then lists dresses before a red
-bag. Without a clear majority, the order stays purely visual.
+majority, the single nearest match stays first and the majority category follows
+in visual order; the response includes `preferred_category`. A red-dress photo then
+lists dresses before a red bag. Without a clear majority, the order stays purely
+visual. Look search does not use the vote.
 
 ## Measure before trusting a model
 
@@ -185,16 +210,23 @@ bag. Without a clear majority, the order stays purely visual.
   --tokenizer-path data/models/fashion-siglip-tokenizer.json
 ```
 
-| Field | What it compares |
-|---|---|
-| `photo_top5_relevant_mean` | Photo search with the task's category filter |
-| `photo_any_category_top5_relevant_mean` | Photo search with no category, with the vote |
-| `photo_any_category_without_vote_top5_relevant_mean` | The same without the vote |
-| `look_top5_relevant_mean` | Text-to-photo search for each task's query |
-| `text_top5_relevant_mean_on_look_tasks` | Word search for the same queries |
+The report's `metrics` block gives, for each search mode, the mean **Hit@5** (a
+relevant offer in the top 5), **MRR@10** (1 / rank of the first relevant offer) and
+**nDCG@10** (rewards several relevant offers near the top):
 
-Rebuild the index with each model you compare (`--model-path` changes the index),
-and use the same tasks for every run.
+| `metrics` key | What it measures |
+|---|---|
+| `text` | Word search, sorted by best match |
+| `photo` | Photo search with the task's category filter (5 results) |
+| `photo_any_category` | Photo search with no category, with the vote |
+| `photo_any_category_without_vote` | The same without the vote |
+| `look` | Text-to-photo search for each task's query |
+| `text_on_look_tasks` | Word search on the same tasks as `look` |
+
+The release gate still needs 30 tasks with 80 % successful. For comparing two
+models or settings, use 50–100 tasks (up to 100 are accepted): with 30, only a
+large difference is distinguishable from noise. Rebuild the index with each model
+you compare (`--model-path` changes the index), and use the same tasks every run.
 
 ## Optional pretrained ViT encoder
 

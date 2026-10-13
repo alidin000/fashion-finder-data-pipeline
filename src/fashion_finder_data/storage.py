@@ -8,7 +8,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -85,7 +85,18 @@ def open_database(path: Path) -> Database:
 
 
 def _iso(value: datetime) -> str:
-    return value.isoformat()
+    """Store aware times in UTC so stored timestamps sort and compare as text."""
+    return (value.astimezone(UTC) if value.tzinfo else value).isoformat()
+
+
+def _instant(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+# A missing value in a new record keeps the stored one: a feed row without photos
+# must not wipe crawled photos, and "unknown" stock must not hide a known state.
+KEEP_WHEN_MISSING = ("brand", "description", "image_urls", "colour_names", "size_options")
 
 
 def _money_text(value: Decimal | None) -> str | None:
@@ -141,6 +152,10 @@ def upsert_offer(database: Database, offer: ParsedOffer) -> bool:
             and existing.source_product_id != offer.source_product_id
         ):
             raise ValueError("canonical URL already belongs to a different source product ID")
+        if existing and _instant(existing.source_fetched_at) > _instant(now):
+            # An older observation arriving late only fills in price history.
+            _record_price(Observation, database, existing.pk, offer, now)
+            return False
         values = {
             "source_product_id": offer.source_product_id
             or (existing.source_product_id if existing else None),
@@ -170,6 +185,11 @@ def upsert_offer(database: Database, offer: ParsedOffer) -> bool:
             for key in ("category", "source_category"):
                 values[key] = getattr(existing, key)
         if existing:
+            for key in KEEP_WHEN_MISSING:
+                if values[key] in (None, "[]"):
+                    values[key] = getattr(existing, key)
+            if offer.availability_status == "unknown":
+                values["availability_status"] = existing.availability_status
 
             def differs(key: str, value: Any) -> bool:
                 old = getattr(existing, key)
@@ -196,27 +216,32 @@ def upsert_offer(database: Database, offer: ParsedOffer) -> bool:
                 retailer=retailer, created_at=now, **values
             )
             offer_id = item.pk
-        if offer.price_amount is not None and offer.currency is not None:
-            previous = (
-                Observation.objects.using(database.alias)
-                .filter(offer_id=offer_id)
-                .order_by("-id")
-                .first()
-            )
-            price = _money_text(offer.price_amount)
-            if (
-                previous is None
-                or Decimal(previous.price_amount) != offer.price_amount
-                or previous.currency != offer.currency
-            ):
-                Observation.objects.using(database.alias).create(
-                    offer_id=offer_id,
-                    price_amount=price,
-                    currency=offer.currency,
-                    observed_at=now,
-                    source_fetched_at=now,
-                )
+        _record_price(Observation, database, offer_id, offer, now)
         return changed
+
+
+def _record_price(Observation, database: Database, offer_id: int, offer: ParsedOffer, now: str):
+    """Add a price observation when it differs from the one just before it in time."""
+    if offer.price_amount is None or offer.currency is None:
+        return
+    observed = _instant(now)
+    previous = None
+    for candidate in Observation.objects.using(database.alias).filter(offer_id=offer_id):
+        when = _instant(candidate.observed_at)
+        if when <= observed and (previous is None or when >= _instant(previous.observed_at)):
+            previous = candidate
+    if (
+        previous is None
+        or Decimal(previous.price_amount) != offer.price_amount
+        or previous.currency != offer.currency
+    ):
+        Observation.objects.using(database.alias).create(
+            offer_id=offer_id,
+            price_amount=_money_text(offer.price_amount),
+            currency=offer.currency,
+            observed_at=now,
+            source_fetched_at=now,
+        )
 
 
 def save_run(database: Database, report: dict[str, Any]) -> None:

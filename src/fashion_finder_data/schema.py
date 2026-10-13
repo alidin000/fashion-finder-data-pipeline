@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -127,6 +127,27 @@ class RetailerOffer(BaseModel):
         return self
 
 
+def image_urls(value: Any, page_url: str) -> list[str]:
+    """Absolute, de-duplicated photo URLs; an unusable photo is dropped, not the offer.
+
+    Accepts plain URLs, relative paths and schema.org ``ImageObject`` entries.
+    """
+    values = value if isinstance(value, list) else [value] if value else []
+    result: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            item = item.get("url") or item.get("contentUrl")
+        if not isinstance(item, str) or not item.strip():
+            continue
+        try:
+            url = canonical_url(urljoin(page_url, item.strip()))
+        except ValueError:
+            continue
+        if url not in result:
+            result.append(url)
+    return result
+
+
 def normalize(raw: RawProductRecord) -> RetailerOffer:
     data = raw.product
     source_url = str(data.get("url") or raw.source_url).strip()
@@ -150,7 +171,6 @@ def normalize(raw: RawProductRecord) -> RetailerOffer:
         values = value if isinstance(value, list) else [value] if value else []
         return [str(item).strip() for item in values if item and str(item).strip()]
 
-    images = [canonical_url(item) for item in strings(data.get("images"))]
     return RetailerOffer(
         source_key=raw.source_key,
         market_code=raw.market_code,
@@ -165,7 +185,7 @@ def normalize(raw: RawProductRecord) -> RetailerOffer:
         price_amount=price,
         currency=currency,
         original_price_amount=original_price,
-        image_urls=images,
+        image_urls=image_urls(data.get("images"), source_url),
         colour_names=strings(data.get("colours")),
         size_options=strings(data.get("sizes")),
         availability_status=availability,

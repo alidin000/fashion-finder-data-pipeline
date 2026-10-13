@@ -9,6 +9,8 @@ import os
 import time
 from pathlib import Path
 
+from django.db import DatabaseError
+
 from .feed import MAX_FEED_BYTES, import_feed
 from .source_policy import load_policies
 from .sources import SOURCES
@@ -72,7 +74,7 @@ def refresh_once(
                 source,
                 require_observed_at=True,
             )
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, DatabaseError) as exc:
             results.append({"source_key": source, "status": "failed", "detail": str(exc)})
             continue
         if run["status"] == "success":
@@ -120,7 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = refresh_once(database, args.data_dir, feed_dir, args.policy, state_path)
             result["analytics_rows_pruned"] = prune_metrics(database)
-        except (OSError, TypeError, ValueError) as exc:
+        except (OSError, TypeError, ValueError, DatabaseError) as exc:
+            # A busy or locked database must not stop the long-running worker.
             result = {"status": "attention", "detail": str(exc), "sources": []}
         print(json.dumps(result, ensure_ascii=False), flush=True)
         if args.once:

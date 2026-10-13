@@ -150,8 +150,13 @@ def lpp_record(item: dict[str, Any], source: Source, page_url: str) -> RawProduc
     ):
         raise ValueError("product URL is outside the Hungarian storefront")
     currency = item.get("currency")
-    price = item.get("minQtyFinalPrice", item.get("final_price"))
-    regular = item.get("minQtyRegularPrice", item.get("price"))
+
+    def first(*keys: str) -> Any:
+        # An explicit null must fall back to the next field, not end the lookup.
+        return next((item[key] for key in keys if item.get(key) is not None), None)
+
+    price = first("minQtyFinalPrice", "final_price")
+    regular = first("minQtyRegularPrice", "price")
     try:
         discounted = parse_money(regular, currency) > parse_money(price, currency)
     except (TypeError, ValueError):
@@ -167,7 +172,7 @@ def lpp_record(item: dict[str, Any], source: Source, page_url: str) -> RawProduc
     stock = [size.get("stock") for size in sizes]
     availability = (
         "in_stock"
-        if True in stock
+        if any(flag is True for flag in stock)  # `True in [1]` is also true
         else "out_of_stock"
         if stock and all(flag is False for flag in stock)
         else "unknown"

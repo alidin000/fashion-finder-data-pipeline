@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from .storage import Database, offer_rows
-from .text_match import matches_terms, query_terms, row_text
+from .text_match import matches_terms, query_terms, relevance, row_text
 
 
 def search_catalogue(
@@ -30,7 +30,7 @@ def search_catalogue(
         raise ValueError("currency must be a three-letter code")
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
-    if sort not in {"price-asc", "price-desc", "recent"}:
+    if sort not in {"price-asc", "price-desc", "recent", "relevance"}:
         raise ValueError("unsupported sort order")
     rows = offer_rows(engine, status="active", currency=currency)
     if source:
@@ -53,6 +53,15 @@ def search_catalogue(
             return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
 
         results.sort(key=lambda item: (seen_at(item[0]), item[0]["id"]), reverse=True)
+    elif sort == "relevance":
+        results.sort(
+            key=lambda item: (
+                -relevance(terms, item[0]),
+                item[1] is None,
+                item[1] or Decimal(0),
+                item[0]["id"],
+            )
+        )
     elif sort == "price-desc":
         results.sort(
             key=lambda item: (

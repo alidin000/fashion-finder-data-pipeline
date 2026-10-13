@@ -266,13 +266,22 @@ Search the stored HUF offers without making another retailer request:
 
 ```powershell
 fashion-finder search --query dzseki --max-price 30000 --sort price-asc
+fashion-finder search --query "fekete kabát" --sort relevance
 fashion-finder search --category dresses --source reserved --sort recent --limit 10
 ```
 
-Text search ignores accents and also accepts common English clothing and colour words, so
-`black coat`, `fekete kabát` and `fekete kabat` find the same Hungarian listings. It matches title, brand, description, category and colour. The web
-colour filter works the same way (`blue` matches `sötétkék`), and a size such as `M`
-matches a combined size like `M/L`.
+Text search ignores accents and translates common clothing and colour words both ways,
+so `black coat`, `fekete kabát` and `fekete kabat` find the same listings, Hungarian
+or English. It matches title, brand, description, category and colour, word by word:
+a word of four or more letters may start or end a longer word (`kabát` finds
+`kabátok` and `gyapjúkabát`), while a shorter one must be a whole word, so `red` no
+longer matches `Redőzött`. `--sort relevance` (the shopper page's **Best match**)
+ranks title hits above category or colour hits, and exact words above partial ones.
+The web colour filter works the same way (`blue` matches `sötétkék`), and a size
+such as `M` matches a combined size like `M/L`.
+
+Search pages use a keyset cursor: **Load more** continues after the last result
+shown, even if that item has since sold out or changed price.
 
 Search returns JSONL with source links, prices, category, image URLs, and last-seen time. The default currency is HUF; use `--currency` for another stored currency. Budget comparisons and price sorting use exact decimal values within one currency. Results reflect the last collection, so unknown stock remains `unknown`.
 

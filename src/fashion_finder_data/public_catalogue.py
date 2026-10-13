@@ -17,7 +17,14 @@ from django.db.models import Q
 from .schema import is_hungarian_source_url
 from .source_policy import SourcePolicy
 from .storage import Database, offer_rows
-from .text_match import matches_colour, matches_size, matches_terms, query_terms, row_text
+from .text_match import (
+    matches_colour,
+    matches_size,
+    matches_terms,
+    query_terms,
+    relevance,
+    row_text,
+)
 
 
 def _utc(value: str) -> datetime:
@@ -180,7 +187,7 @@ def search_public_catalogue(
     cursor: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    if sort not in {"price-asc", "price-desc", "recent"}:
+    if sort not in SORTS:
         raise ValueError("unsupported sort order")
     if not 1 <= limit <= 50:
         raise ValueError("limit must be between 1 and 50")
@@ -210,30 +217,57 @@ def search_public_catalogue(
             continue
         if not matches_terms(terms, row_text(row)):
             continue
-        matches.append((row, policy))
-    if sort == "recent":
-        matches.sort(
-            key=lambda item: (-_utc(item[0]["source_fetched_at"]).timestamp(), item[0]["id"])
-        )
-    elif sort == "price-desc":
-        matches.sort(key=lambda item: (-Decimal(item[0]["price_amount"]), item[0]["id"]))
-    else:
-        matches.sort(key=lambda item: (Decimal(item[0]["price_amount"]), item[0]["id"]))
+        matches.append((sort_key(sort, row, relevance(terms, row)), row, policy))
+    matches.sort(key=lambda item: item[0])
     start = 0
     if cursor:
         try:
             payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
             if payload["f"] != fingerprint:
                 raise ValueError("cursor does not match filters")
-            start = next(i + 1 for i, item in enumerate(matches) if item[0]["id"] == payload["id"])
-        except (ValueError, KeyError, TypeError, StopIteration, binascii.Error) as exc:
+            after = _decode_key(sort, payload["k"])
+        except (ValueError, KeyError, TypeError, InvalidOperation, binascii.Error) as exc:
             raise ValueError("invalid or expired cursor") from exc
+        # Keyset paging: continue after the last key shown, even if that offer has
+        # since gone out of stock or changed price.
+        start = next((i for i, item in enumerate(matches) if item[0] > after), len(matches))
     page = matches[start : start + limit]
     next_cursor = None
     if start + limit < len(matches):
-        payload = {"f": fingerprint, "id": page[-1][0]["id"]}
+        payload = {"f": fingerprint, "k": _encode_key(page[-1][0])}
         next_cursor = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return {
-        "items": [_public_offer(row, policy) for row, policy in page],
+        "items": [_public_offer(row, policy) for _, row, policy in page],
         "next_cursor": next_cursor,
     }
+
+
+SORTS = {"price-asc", "price-desc", "recent", "relevance"}
+
+
+def sort_key(sort: str, row: dict[str, Any], score: float = 0.0) -> tuple:
+    """Total order for one sort; the offer id breaks ties."""
+    price = Decimal(row["price_amount"])
+    if sort == "recent":
+        return (-_utc(row["source_fetched_at"]).timestamp(), row["id"])
+    if sort == "price-desc":
+        return (-price, row["id"])
+    if sort == "relevance":
+        return (-round(score, 6), price, row["id"])
+    return (price, row["id"])
+
+
+def _encode_key(key: tuple) -> list:
+    return [str(value) if isinstance(value, Decimal) else value for value in key]
+
+
+def _decode_key(sort: str, values: list) -> tuple:
+    types = {
+        "recent": (float, int),
+        "price-desc": (Decimal, int),
+        "relevance": (float, Decimal, int),
+        "price-asc": (Decimal, int),
+    }[sort]
+    if not isinstance(values, list) or len(values) != len(types):
+        raise ValueError("cursor key has the wrong shape")
+    return tuple(kind(value) for kind, value in zip(types, values, strict=True))

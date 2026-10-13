@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import warnings
@@ -12,6 +13,7 @@ from io import BytesIO
 from pathlib import Path
 
 from django.conf import settings
+from django.db import DatabaseError
 from django.http import FileResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from PIL import Image, UnidentifiedImageError
@@ -30,6 +32,7 @@ from fashion_finder_data.source_policy import load_policies
 from fashion_finder_data.storage import Database
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_UPLOAD_BODY = MAX_IMAGE_BYTES + 256 * 1024  # the photo plus small form fields
 MAX_IMAGE_PIXELS = 20_000_000
 _api_config: ContextVar[tuple[Database, Path | None] | None] = ContextVar(
     "api_config", default=None
@@ -81,10 +84,24 @@ def _look_search_ready(database: Database, policy_path: Path | None) -> bool:
     )
 
 
+def _busy_as_503(view):
+    """A locked or busy SQLite catalogue is temporary: answer 503, not a server error."""
+
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except DatabaseError:
+            return _error("the catalogue is busy; try again shortly", 503)
+
+    return wrapper
+
+
 def _error(detail: str, status: int) -> JsonResponse:
     return JsonResponse({"detail": detail}, status=status)
 
 
+@_busy_as_503
 def health(request):
     if request.method != "GET":
         return _error("method not allowed", 405)
@@ -118,6 +135,7 @@ def health(request):
 
 
 @csrf_exempt
+@_busy_as_503
 def event(request):
     if request.method != "POST":
         return _error("method not allowed", 405)
@@ -136,6 +154,7 @@ def event(request):
     return JsonResponse({"status": "recorded"}, status=201)
 
 
+@_busy_as_503
 def search(request):
     if request.method != "GET":
         return _error("method not allowed", 405)
@@ -172,6 +191,7 @@ def search(request):
     return JsonResponse(result)
 
 
+@_busy_as_503
 def search_look(request):
     """Rank indexed product photos by a written description, e.g. ``black puffer jacket``."""
     if request.method != "GET":
@@ -195,6 +215,7 @@ def search_look(request):
             database,
             load_policies(policy_path),
             params.get("q", ""),
+            limit=int(params.get("limit", "20")),
             source=params.get("source") or None,
             category=params.get("category") or None,
             colour=params.get("colour") or None,
@@ -207,6 +228,7 @@ def search_look(request):
     return JsonResponse(result)
 
 
+@_busy_as_503
 def offer(request, offer_id: int):
     if request.method != "GET":
         return _error("method not allowed", 405)
@@ -216,9 +238,17 @@ def offer(request, offer_id: int):
 
 
 @csrf_exempt
+@_busy_as_503
 def search_image(request):
     if request.method != "POST":
         return _error("method not allowed", 405)
+    # Reject oversized bodies before Django parses (and buffers) the multipart form.
+    try:
+        declared = int(request.META.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        return _error("invalid Content-Length", 400)
+    if declared > MAX_UPLOAD_BODY:
+        return _error("image exceeds 5 MB", 413)
     for key, maximum in {
         "source": 40,
         "category": 80,
@@ -236,65 +266,58 @@ def search_image(request):
     data = file.read(MAX_IMAGE_BYTES + 1)
     if len(data) > MAX_IMAGE_BYTES:
         return _error("image exceeds 5 MB", 413)
+    expected = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(BytesIO(data)) as image:
-                image_format = image.format
-                expected = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+            with Image.open(BytesIO(data)) as decoded:
+                image_format = decoded.format
                 if image_format not in expected:
                     return _error("image encoding does not match allowed types", 415)
                 if file.content_type != expected[image_format]:
                     return _error("image MIME type does not match data", 415)
-                if image.width * image.height > MAX_IMAGE_PIXELS:
+                if decoded.width * decoded.height > MAX_IMAGE_PIXELS:
                     return _error("image dimensions are too large", 413)
-                image.load()
-                database, policy_path = _config()
-                if policy_path is None or not policy_path.is_file():
-                    return _error("image search is not configured", 503)
-                policies = load_policies(policy_path)
-                demo_mode = os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
-                if demo_mode:
-                    available = demo_index_ready(database, policies)
-                else:
-                    available = os.environ.get(
-                        "FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT"
-                    ) == "1" and image_index_ready(
-                        database, policies, model_path=_image_model_path()
-                    )
-                if not available:
-                    return _error("image search is not configured", 503)
-                try:
-                    budget = (
-                        Decimal(request.POST["max_price"]) if "max_price" in request.POST else None
-                    )
-                    search_images = search_demo_image if demo_mode else search_indexed_image
-                    options = {
-                        "category": request.POST.get("category") or None,
-                        "colour": request.POST.get("colour") or None,
-                        "size": request.POST.get("size") or None,
-                        "max_price": budget,
-                    }
-                    if not demo_mode:
-                        options["source"] = request.POST.get("source") or None
-                        options["model_path"] = _image_model_path()
-                    result = search_images(
-                        database,
-                        policies,
-                        image,
-                        **options,
-                    )
-                except (InvalidOperation, ValueError) as exc:
-                    return _error(str(exc), 400)
-                return JsonResponse(result)
+                decoded.load()
+                image = decoded.copy()
     except (
         UnidentifiedImageError,
         OSError,
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
     ):
+        # Only decoding sits in this block: a server-side fault must not look like
+        # a bad photo.
         return _error("cannot decode image", 422)
-    return _error("image search is not configured", 503)
+    database, policy_path = _config()
+    if policy_path is None or not policy_path.is_file():
+        return _error("image search is not configured", 503)
+    policies = load_policies(policy_path)
+    demo_mode = os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
+    if demo_mode:
+        available = demo_index_ready(database, policies)
+    else:
+        available = os.environ.get("FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT") == "1" and (
+            image_index_ready(database, policies, model_path=_image_model_path())
+        )
+    if not available:
+        return _error("image search is not configured", 503)
+    try:
+        budget = Decimal(request.POST["max_price"]) if "max_price" in request.POST else None
+        search_images = search_demo_image if demo_mode else search_indexed_image
+        options = {
+            "category": request.POST.get("category") or None,
+            "colour": request.POST.get("colour") or None,
+            "size": request.POST.get("size") or None,
+            "max_price": budget,
+        }
+        if not demo_mode:
+            options["source"] = request.POST.get("source") or None
+            options["model_path"] = _image_model_path()
+        result = search_images(database, policies, image, **options)
+    except (InvalidOperation, ValueError) as exc:
+        return _error(str(exc), 400)
+    return JsonResponse(result)
 
 
 def demo_image(request, sku: str):

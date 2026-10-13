@@ -170,7 +170,7 @@ def test_invalid_manifest_does_not_replace_a_working_index(tmp_path):
         )
     }
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(ValueError, match="not permitted"):
+    with pytest.raises(ValueError, match="does not permit images"):
         build_image_index(database, denied, manifest_path)
     assert hashlib.sha256(target.read_bytes()).hexdigest() == initial_hash
 
