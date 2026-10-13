@@ -74,7 +74,7 @@ flowchart LR
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/v1/health` | Service status, latest catalogue timestamp, photo capability, analytics setting. |
+| `GET /api/v1/health` | Service status, latest catalogue timestamp, photo capability, analytics setting, and local demo mode. |
 | `GET /api/v1/search` | Eligible offers with text, filters, sort, limit, and cursor. |
 | `GET /api/v1/offers/{id}` | One current, permitted offer or 404. |
 | `POST /api/v1/search/image` | Validates an uploaded image; currently returns 503 for matching. |
@@ -116,6 +116,11 @@ empty catalogue. Do not mark a shop approved merely to fill the UI. Follow the
 inspect worker logs, back up SQLite, and check the app. The
 [local Python/Node setup](docs/app-local-setup.md) covers development without
 Docker.
+
+For a populated **synthetic local demo**, run `bash scripts/start_local_demo.sh`
+and open `http://127.0.0.1:3300`. The [demo guide](docs/local-demo.md) explains
+its separate database, sample labels, and limits. Demo products never count
+toward the real-source release gates.
 
 ## Data coverage and release state
 

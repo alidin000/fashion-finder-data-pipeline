@@ -10,7 +10,7 @@ from pathlib import Path
 from .public_catalogue import _visible
 from .readiness import AUDIT_FIELDS, AUDIT_TARGET, _safe_csv_cell, _validate_category
 from .source_policy import SourcePolicy
-from .sources import SOURCES
+from .sources import PRODUCTION_SOURCES
 from .storage import Database, offer_rows
 
 VERDICT_FIELDS = (
@@ -51,7 +51,7 @@ def _read_sample(path: Path, category: str) -> tuple[str, list[dict[str, str]]]:
     if not rows:
         raise ValueError(f"{path}: audit CSV has no offers")
     source = rows[0]["source_key"]
-    if source not in SOURCES:
+    if source not in PRODUCTION_SOURCES:
         raise ValueError(f"{path}: unsupported source key: {source}")
     for line_number, row in enumerate(rows, start=2):
         if (

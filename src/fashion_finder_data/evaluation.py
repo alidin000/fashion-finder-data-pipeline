@@ -93,7 +93,9 @@ def evaluate_tasks(
     photo_latencies = []
     for task in tasks:
         useful = [offers[offer_id] for offer_id in task.text_useful_ids if offers[offer_id]]
-        useful = [item for item in useful if item["category"] == category]
+        useful = [
+            item for item in useful if item["category"] == category and item["source_key"] != "demo"
+        ]
         source_count = len({item["source_key"] for item in useful})
         text_success = len(useful) >= 3 and source_count >= 2
         text_latencies.append(task.text_latency_ms)
@@ -109,6 +111,7 @@ def evaluate_tasks(
             permitted = all(
                 offer is not None
                 and offer["category"] == category
+                and offer["source_key"] != "demo"
                 and bool(offer["image_urls"])
                 and bool(
                     (policy := policies.get((offer["source_key"], "HU")))

@@ -63,7 +63,7 @@ def parse_money(value: Any, currency: str | None = None) -> Decimal | None:
 
 
 class RawProductRecord(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear"]
+    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear", "demo"]
     market_code: Literal["HU"] = "HU"
     source_url: str
     fetched_at: datetime = Field(default_factory=utc_now)
@@ -78,7 +78,7 @@ class RawProductRecord(BaseModel):
 
 
 class RetailerOffer(BaseModel):
-    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear"]
+    source_key: Literal["zara", "hm", "reserved", "pullandbear", "aboutyou", "answear", "demo"]
     market_code: Literal["HU"] = "HU"
     source_product_id: str | None = None
     source_url: str

@@ -4,6 +4,7 @@ This page lists the remaining evidence for the
 [technical application plan](application-implementation-plan.md). It is a
 checklist, not a claim that the private beta is ready. Run commands from the
 repository root against a **copy** of the approved local catalogue first.
+The [synthetic local demo](local-demo.md) is excluded from these gates.
 
 | Gate | Current state | Evidence needed |
 | --- | --- | --- |

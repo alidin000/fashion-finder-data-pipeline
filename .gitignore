@@ -21,6 +21,7 @@ data/worker-state.json
 data/evaluation/**
 data/partner/**
 data/research/**
+data/demo/**
 data/*.sqlite
 data/*.db
 data/source-policies*.json

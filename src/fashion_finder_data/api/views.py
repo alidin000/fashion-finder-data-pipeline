@@ -69,6 +69,7 @@ def health(request):
             "catalogue_timestamp": checked,
             "image_search": "unavailable",
             "analytics_enabled": os.environ.get("FASHION_FINDER_ANALYTICS_ENABLED") == "1",
+            "demo_mode": os.environ.get("FASHION_FINDER_DEMO_MODE") == "1",
         }
     )
 

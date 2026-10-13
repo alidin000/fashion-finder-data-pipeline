@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .public_catalogue import _safe_image_url, _visible
 from .source_policy import SourcePolicy
-from .sources import SOURCES
+from .sources import PRODUCTION_SOURCES, SOURCES
 from .storage import Database, offer_rows
 from .taxonomy import CATEGORIES
 
@@ -69,7 +69,7 @@ def readiness_report(
     current = now or datetime.now(UTC)
     rows = offer_rows(database, category=category, retailer__market_code="HU")
     sources = []
-    for source_key in SOURCES:
+    for source_key in PRODUCTION_SOURCES:
         policy = policies.get((source_key, "HU"))
         own_rows = [row for row in rows if row["source_key"] == source_key]
         visible = [(row, _visible(row, policies, current)) for row in own_rows]
@@ -131,6 +131,8 @@ def write_audit_sample(
     _validate_category(category)
     if source_key not in SOURCES:
         raise ValueError(f"unknown source: {source_key}")
+    if source_key == "demo":
+        raise ValueError("demo offers cannot be used for a release audit")
     if not 1 <= count <= 100:
         raise ValueError("count must be between 1 and 100")
     current = now or datetime.now(UTC)

@@ -1,0 +1,27 @@
+name: fashion-finder-demo
+
+services:
+  migrate:
+    image: fashion-finder-api:demo
+    environment:
+      FASHION_FINDER_DEMO_MODE: "1"
+  api:
+    image: fashion-finder-api:demo
+    environment:
+      FASHION_FINDER_DEMO_MODE: "1"
+  worker:
+    image: fashion-finder-api:demo
+    environment:
+      FASHION_FINDER_DEMO_MODE: "1"
+  web:
+    image: fashion-finder-web:demo
+  demo-seed:
+    image: fashion-finder-api:demo
+    user: ${FASHION_FINDER_UID:-1000}:${FASHION_FINDER_GID:-1000}
+    volumes:
+      - ${FASHION_FINDER_DATA_DIR:-./data/demo}:/data
+    environment:
+      FASHION_FINDER_DEMO_MODE: "1"
+      FASHION_FINDER_DB: /data/fashion_finder.sqlite
+    command: ["fashion-finder-demo", "--data-dir", "/data"]
+    restart: "no"

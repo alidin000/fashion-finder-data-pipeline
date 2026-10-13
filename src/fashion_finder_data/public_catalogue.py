@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -39,6 +40,8 @@ def _safe_image_url(value: str) -> bool:
 def _visible(
     row: dict[str, Any], policies: dict[tuple[str, str], SourcePolicy], now: datetime
 ) -> SourcePolicy | None:
+    if row["source_key"] == "demo" and os.environ.get("FASHION_FINDER_DEMO_MODE") != "1":
+        return None
     policy = policies.get((row["source_key"], row["market_code"]))
     if policy is None or policy.approval_status != "approved" or not policy.allow_public_listing:
         return None
@@ -100,6 +103,7 @@ def _approved_pairs(
         for (key, market), policy in policies.items()
         if policy.approval_status == "approved"
         and policy.allow_public_listing
+        and (key != "demo" or os.environ.get("FASHION_FINDER_DEMO_MODE") == "1")
         and (source is None or key == source)
     ]
 

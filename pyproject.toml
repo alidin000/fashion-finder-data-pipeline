@@ -33,6 +33,7 @@ crawlee-benchmark = [
 [project.scripts]
 fashion-finder = "fashion_finder_data.cli:main"
 fashion-finder-worker = "fashion_finder_data.refresh:main"
+fashion-finder-demo = "fashion_finder_data.demo:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

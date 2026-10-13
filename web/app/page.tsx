@@ -34,8 +34,8 @@ function formatHuf(amount: string) {
 }
 
 function sourceName(key: string) {
-  return { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", aboutyou: "ABOUT YOU", answear: "Answear" }[
-    key as "hm" | "pullandbear" | "zara" | "reserved" | "aboutyou" | "answear"
+  return { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", aboutyou: "ABOUT YOU", answear: "Answear", demo: "Local demo" }[
+    key as "hm" | "pullandbear" | "zara" | "reserved" | "aboutyou" | "answear" | "demo"
   ] ?? key;
 }
 
@@ -64,6 +64,7 @@ export default function Home() {
   const [photoMessage, setPhotoMessage] = useState("");
   const [photoCapability, setPhotoCapability] = useState(false);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
   const requestSerial = useRef(0);
   const lastSearchType = useRef<SearchType>("text");
 
@@ -86,9 +87,10 @@ export default function Home() {
   useEffect(() => {
     void fetch(`${API_BASE}/api/v1/health`)
       .then((response) => response.json())
-      .then((health: { image_search?: string; analytics_enabled?: boolean }) => {
+      .then((health: { image_search?: string; analytics_enabled?: boolean; demo_mode?: boolean }) => {
         setPhotoCapability(health.image_search === "available");
         setAnalyticsEnabled(health.analytics_enabled === true);
+        setDemoMode(health.demo_mode === true);
       })
       .catch(() => setPhotoCapability(false));
   }, []);
@@ -117,6 +119,7 @@ export default function Home() {
       if (!response.ok) throw new Error(`Search failed (${response.status}). Check the API and filters.`);
       const result = (await response.json()) as SearchResponse;
       if (serial !== requestSerial.current) return;
+      if (result.items.some((item) => item.source_key === "demo")) setDemoMode(true);
       setItems((old) => (cursor ? [...old, ...result.items] : result.items));
       setNextCursor(result.next_cursor);
       setStatus("ready");
@@ -191,12 +194,13 @@ export default function Home() {
           <div className="brand"><span className="brand-mark">F<span>F</span></span><span>FASHION FINDER</span></div>
           <span className="market-label">HUNGARY · HUF</span>
         </header>
+        {demoMode && <div className="demo-banner" role="status">LOCAL DEMO · Synthetic products and prices. No retailer links or live stock.</div>}
 
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-copy">
             <span className="eyebrow">THE LOOK YOU LOVE, WITHIN REACH</span>
             <h1 id="hero-title">Find the piece.<br /><em>Make it yours.</em></h1>
-            <p>Explore current fashion offers from approved Hungarian shops. Start with a style, a budget, or a photo.</p>
+            <p>{demoMode ? "Explore synthetic sample items to test search, filters, and budgets locally." : "Explore current fashion offers from approved Hungarian shops. Start with a style, a budget, or a photo."}</p>
             <a className="text-link" href="#search">Explore the catalogue <span aria-hidden>↗</span></a>
           </div>
           <div className="hero-art" aria-hidden="true">
@@ -220,7 +224,7 @@ export default function Home() {
                 <label>Colour<input value={colour} onChange={(event) => setColour(event.target.value)} placeholder="Any colour" /></label>
                 <label>Maximum price · Ft<input type="number" min="0" step="1" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="No limit" /></label>
                 <label>Size<input value={size} onChange={(event) => setSize(event.target.value)} placeholder="Any size" /></label>
-                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">All approved shops</option><option value="reserved">Reserved</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></select></label>
+                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">{demoMode ? "All demo items" : "All approved shops"}</option>{demoMode ? <option value="demo">Local demo</option> : <><option value="reserved">Reserved</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></>}</select></label>
                 <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>
@@ -229,15 +233,15 @@ export default function Home() {
         </section>
 
         <section className="results-section" aria-labelledby="results-title">
-          <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOUR SEARCH</span><h2 id="results-title">The finds</h2></div><span className="results-count">{status === "ready" ? `${items.length} ${items.length === 1 ? "offer" : "offers"} shown` : "LIVE CATALOGUE"}</span></div>
-          {status === "idle" && <div className="empty-state"><span>✦</span><h3>Your next favourite starts here.</h3><p>Search by style, category, colour, or budget to see approved offers.</p></div>}
+          <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOUR SEARCH</span><h2 id="results-title">The finds</h2></div><span className="results-count">{status === "ready" ? `${items.length} ${items.length === 1 ? "offer" : "offers"} shown` : demoMode ? "DEMO CATALOGUE" : "LIVE CATALOGUE"}</span></div>
+          {status === "idle" && <div className="empty-state"><span>✦</span><h3>Your next favourite starts here.</h3><p>{demoMode ? "Search synthetic items by style, category, colour, or budget." : "Search by style, category, colour, or budget to see approved offers."}</p></div>}
           {status === "loading" && <div className="empty-state" role="status"><h3>Finding your options…</h3></div>}
           {status === "error" && <div className="empty-state error-state" role="alert"><h3>Search is unavailable</h3><p>{error}</p></div>}
-          {status === "ready" && items.length === 0 && <div className="empty-state"><span>◇</span><h3>No current offers found.</h3><p>Try a wider budget or category. Only approved, recently checked offers appear here.</p></div>}
-          {items.length > 0 && <div className="offer-grid">{items.map((item) => <article className="offer-card" key={item.id}><div className="offer-image">{item.image_urls[0] ? <img src={item.image_urls[0]} alt={item.title} loading="lazy" /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}<span className="match-pill">{matchName(item.match_type)}</span></div><div className="offer-info"><span className="offer-source">{sourceName(item.source_key)}</span><h3>{item.title}</h3><div className="offer-bottom"><strong>{formatHuf(item.price_amount)}</strong><a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => sendMetric(clickEvent(lastSearchType.current, item.source_key))} aria-label={`Open ${item.title} at ${sourceName(item.source_key)}`}>View item <span aria-hidden>↗</span></a></div><p className="offer-meta">Checked {new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeZone: "Europe/Budapest" }).format(new Date(item.last_checked_at))} · Stock {item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ")}</p>{item.attribution && <p className="offer-meta">{item.attribution}</p>}</div></article>)}</div>}
+          {status === "ready" && items.length === 0 && <div className="empty-state"><span>◇</span><h3>{demoMode ? "No sample items found." : "No current offers found."}</h3><p>{demoMode ? "Try a wider budget or another category." : "Try a wider budget or category. Only approved, recently checked offers appear here."}</p></div>}
+          {items.length > 0 && <div className="offer-grid">{items.map((item) => <article className="offer-card" key={item.id}><div className="offer-image">{item.image_urls[0] ? <img src={item.image_urls[0]} alt={item.title} loading="lazy" /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}<span className="match-pill">{matchName(item.match_type)}</span></div><div className="offer-info"><span className="offer-source">{sourceName(item.source_key)}</span><h3>{item.title}</h3><div className="offer-bottom"><strong>{formatHuf(item.price_amount)}</strong>{item.source_key === "demo" ? <span className="demo-item-label">Sample item</span> : <a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => sendMetric(clickEvent(lastSearchType.current, item.source_key))} aria-label={`Open ${item.title} at ${sourceName(item.source_key)}`}>View item <span aria-hidden>↗</span></a>}</div><p className="offer-meta">Checked {new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeZone: "Europe/Budapest" }).format(new Date(item.last_checked_at))} · Stock {item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ")}</p>{item.attribution && <p className="offer-meta">{item.attribution}</p>}</div></article>)}</div>}
           {status === "ready" && nextCursor && <button className="load-more" type="button" onClick={() => void search(nextCursor)}>Load more finds ↓</button>}
         </section>
-        <footer><span>FASHION FINDER</span><p>Prices and availability are checked at the time shown. Final details are on the retailer website.</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
+        <footer><span>FASHION FINDER</span><p>{demoMode ? "Local demo uses synthetic items and prices; photo matching remains unavailable." : "Prices and availability are checked at the time shown. Final details are on the retailer website."}</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
       </div>
     </main>
   );

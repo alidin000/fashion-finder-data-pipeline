@@ -54,9 +54,11 @@ SOURCES = {
     ),
     "aboutyou": Source("aboutyou", "aboutyou.hu", None, None, None, market_paths=("/p/",)),
     "answear": Source("answear", "answear.hu", None, None, None, market_paths=("/p/",)),
+    "demo": Source("demo", "fashion-finder-demo.invalid", None, None, None),
 }
 
 CRAWL_SOURCES = {key: source for key, source in SOURCES.items() if source.crawl_enabled}
+PRODUCTION_SOURCES = {key: source for key, source in SOURCES.items() if key != "demo"}
 
 
 def allowed_url(source: Source, value: str) -> bool:

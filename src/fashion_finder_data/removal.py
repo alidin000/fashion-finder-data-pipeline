@@ -50,6 +50,12 @@ SOURCE_POLICY = {
         "http_403_429_5xx": "recheck",
         "http_404_410": "manual_review",
     },
+    "demo": {
+        "web_evidence": "synthetic local fixture; no retailer page exists",
+        "missing_from_sample": "manual_review",
+        "http_403_429_5xx": "manual_review",
+        "http_404_410": "manual_review",
+    },
 }
 
 
