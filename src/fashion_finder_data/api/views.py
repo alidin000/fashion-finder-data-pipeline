@@ -19,6 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from fashion_finder_data.analytics import record_metric
 from fashion_finder_data.catalogue.models import RetailerOffer
 from fashion_finder_data.demo_images import demo_image_bytes, demo_index_ready, search_demo_image
+from fashion_finder_data.image_index import image_index_ready, search_indexed_image
 from fashion_finder_data.public_catalogue import public_offer, search_public_catalogue
 from fashion_finder_data.source_policy import load_policies
 from fashion_finder_data.storage import Database
@@ -64,18 +65,17 @@ def health(request):
         .values_list("source_fetched_at", flat=True)
         .first()
     )
+    image_search_available = False
+    if policy_path is not None and policy_path.is_file():
+        if os.environ.get("FASHION_FINDER_DEMO_MODE") == "1":
+            image_search_available = demo_index_ready(database, load_policies(policy_path))
+        elif os.environ.get("FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT") == "1":
+            image_search_available = image_index_ready(database, load_policies(policy_path))
     return JsonResponse(
         {
             "status": "ok",
             "catalogue_timestamp": checked,
-            "image_search": (
-                "available"
-                if os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
-                and policy_path is not None
-                and policy_path.is_file()
-                and demo_index_ready(database, load_policies(policy_path))
-                else "unavailable"
-            ),
+            "image_search": "available" if image_search_available else "unavailable",
             "analytics_enabled": os.environ.get("FASHION_FINDER_ANALYTICS_ENABLED") == "1",
             "demo_mode": os.environ.get("FASHION_FINDER_DEMO_MODE") == "1",
         }
@@ -149,7 +149,13 @@ def offer(request, offer_id: int):
 def search_image(request):
     if request.method != "POST":
         return _error("method not allowed", 405)
-    for key, maximum in {"category": 80, "colour": 80, "size": 40, "max_price": 40}.items():
+    for key, maximum in {
+        "source": 40,
+        "category": 80,
+        "colour": 80,
+        "size": 40,
+        "max_price": 40,
+    }.items():
         if len(request.POST.get(key, "")) > maximum:
             return _error(f"{key} is too long", 400)
     file = request.FILES.get("file")
@@ -174,25 +180,36 @@ def search_image(request):
                     return _error("image dimensions are too large", 413)
                 image.load()
                 database, policy_path = _config()
-                if (
-                    os.environ.get("FASHION_FINDER_DEMO_MODE") != "1"
-                    or policy_path is None
-                    or not policy_path.is_file()
-                    or not demo_index_ready(database, (policies := load_policies(policy_path)))
-                ):
+                if policy_path is None or not policy_path.is_file():
+                    return _error("image search is not configured", 503)
+                policies = load_policies(policy_path)
+                demo_mode = os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
+                if demo_mode:
+                    available = demo_index_ready(database, policies)
+                else:
+                    available = os.environ.get(
+                        "FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT"
+                    ) == "1" and image_index_ready(database, policies)
+                if not available:
                     return _error("image search is not configured", 503)
                 try:
                     budget = (
                         Decimal(request.POST["max_price"]) if "max_price" in request.POST else None
                     )
-                    result = search_demo_image(
+                    search_images = search_demo_image if demo_mode else search_indexed_image
+                    options = {
+                        "category": request.POST.get("category") or None,
+                        "colour": request.POST.get("colour") or None,
+                        "size": request.POST.get("size") or None,
+                        "max_price": budget,
+                    }
+                    if not demo_mode:
+                        options["source"] = request.POST.get("source") or None
+                    result = search_images(
                         database,
                         policies,
                         image,
-                        category=request.POST.get("category") or None,
-                        colour=request.POST.get("colour") or None,
-                        size=request.POST.get("size") or None,
-                        max_price=budget,
+                        **options,
                     )
                 except (InvalidOperation, ValueError) as exc:
                     return _error(str(exc), 400)

@@ -14,6 +14,7 @@ from .collectors import crawl
 from .evaluation import evaluate_tasks
 from .feed import import_feed, validate_feed
 from .feed_mapping import map_xml_feed
+from .image_index import build_image_index
 from .pipeline import ingest_jsonl, ingest_records
 from .quality import quality_report
 from .readiness import readiness_report, write_audit_sample
@@ -126,6 +127,13 @@ def make_parser() -> argparse.ArgumentParser:
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
     evaluation.add_argument("--output", type=Path, help="Create a JSON report file")
+    images = commands.add_parser(
+        "index-images", help="Build a local image-search experiment from permitted files"
+    )
+    images.add_argument("manifest", type=Path)
+    images.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
     metrics = commands.add_parser("analytics-report", help="Show anonymous daily event totals")
     metrics.add_argument("--days", type=int, default=7)
     metrics.add_argument("--output", type=Path, help="Create a JSON report file")
@@ -262,6 +270,15 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
             )
         except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "index-images":
+        try:
+            if args.policy is None:
+                raise ValueError("--policy is required to index images")
+            result = build_image_index(engine, load_policies(args.policy), args.manifest)
+        except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

@@ -7,9 +7,10 @@ over offers that a source policy permits the app to publish.
 
 The repository is a working **local prototype**, not a public shopping service.
 The default source policy publishes no offers. Photo upload has a real preview.
-The isolated demo compares five CC0 images by coarse colour and layout; real
-retailer photo search still needs image rights, an image index, and real-user
-evaluation.
+The isolated demo compares five CC0 images by coarse colour and layout. An
+[offline image-index experiment](docs/local-image-index.md) can use locally
+supplied, policy-permitted feed photos. Real retailer photo search still needs
+source rights, a validated encoder, and real-user evaluation.
 
 ## What it looks like
 
@@ -79,7 +80,7 @@ flowchart LR
 | `GET /api/v1/health` | Service status, latest catalogue timestamp, photo capability, analytics setting, and local demo mode. |
 | `GET /api/v1/search` | Eligible offers with text, filters, sort, limit, and cursor. |
 | `GET /api/v1/offers/{id}` | One current, permitted offer or 404. |
-| `POST /api/v1/search/image` | Validates an uploaded image and matches against five local demo images when demo mode is enabled; otherwise returns 503. |
+| `POST /api/v1/search/image` | Validates an uploaded image; matches the five demo samples or an explicitly enabled local product-image index; otherwise returns 503. |
 | `POST /api/v1/events` | Records coarse daily metrics only when analytics is enabled. |
 
 ### Where the code lives

@@ -161,6 +161,7 @@ export default function Home() {
     if (colour.trim()) data.append("colour", colour.trim());
     if (size.trim()) data.append("size", size.trim());
     if (maxPrice) data.append("max_price", maxPrice);
+    if (source) data.append("source", source);
     try {
       const response = await fetch(`${API_BASE}/api/v1/search/image`, {
         method: "POST",
@@ -184,7 +185,7 @@ export default function Home() {
       setStatus("ready");
       lastSearchType.current = "photo";
       sendMetric(searchEvent("photo", Boolean(category || colour || size || maxPrice || source), result.items.length));
-      setPhotoMessage(demoMode ? "Showing visual matches from five CC0 sample images. Results are style inspiration, not verified products." : "Showing visually similar offers below.");
+      setPhotoMessage(demoMode ? "Showing visual matches from five CC0 sample images. Results are style inspiration, not verified products." : "Showing experimental visual matches. Check each product on the retailer website.");
     } catch {
       setPhotoMessage("The API is unavailable. Start it locally and try again.");
       sendMetric(errorEvent("photo", responseStatus));
@@ -232,7 +233,7 @@ export default function Home() {
                 <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>
-            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : "Preview your photo here. Visual matching opens when approved product images are available."}</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} /><div className="photo-preview">{preview ? <img src={preview} alt="Your selected clothing photo" /> : <span>Your preview appears here</span>}</div>{photo && <button className="photo-search" type="button" onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message" role="status">{photoMessage}</p>}</div>
+            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with the locally indexed, permitted offers. This experimental ranking uses colour and layout." : "Preview your photo here. Visual matching opens when approved product images are available."}</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} /><div className="photo-preview">{preview ? <img src={preview} alt="Your selected clothing photo" /> : <span>Your preview appears here</span>}</div>{photo && <button className="photo-search" type="button" onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message" role="status">{photoMessage}</p>}</div>
           </div>
         </section>
 
