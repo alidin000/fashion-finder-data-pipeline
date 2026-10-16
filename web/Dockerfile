@@ -4,7 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-ENV FASHION_FINDER_API_INTERNAL_URL=http://api:8000
+# Compose uses the default; Render passes the service's env vars as build args.
+ARG FASHION_FINDER_API_INTERNAL_URL=http://api:8000
+ENV FASHION_FINDER_API_INTERNAL_URL=${FASHION_FINDER_API_INTERNAL_URL}
 RUN npm run build
 
 # output: "standalone" emits server.js plus only the traced node_modules, so no second npm ci.

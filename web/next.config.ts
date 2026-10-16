@@ -25,13 +25,19 @@ const contentSecurityPolicy = [
   "frame-ancestors 'none'",
 ].join("; ");
 
+// Server-side target of the /api/v1 rewrite. Render's `fromService` hostport is "host:port"
+// without a scheme, and private network traffic is plain HTTP.
+function apiTarget() {
+  const configured = process.env.FASHION_FINDER_API_INTERNAL_URL || "http://127.0.0.1:8000";
+  return /^https?:\/\//.test(configured) ? configured : `http://${configured}`;
+}
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   // Self-contained server.js with only the traced node_modules, for the Docker image.
   output: "standalone",
   async rewrites() {
-    const apiTarget = process.env.FASHION_FINDER_API_INTERNAL_URL ?? "http://127.0.0.1:8000";
-    return [{ source: "/api/v1/:path*", destination: `${apiTarget}/api/v1/:path*` }];
+    return [{ source: "/api/v1/:path*", destination: `${apiTarget()}/api/v1/:path*` }];
   },
   async headers() {
     return [{ source: "/(.*)", headers: [{ key: "Content-Security-Policy", value: contentSecurityPolicy }] }];
