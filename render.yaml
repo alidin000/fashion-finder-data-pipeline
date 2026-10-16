@@ -1,17 +1,16 @@
-# Render Blueprint (https://render.com/docs/blueprint-spec).
-# A Render disk attaches to one service, so the private API service owns the SQLite
-# disk and runs the migration, the hourly feed worker and Gunicorn together
-# (scripts/render-api-start.sh). The public Next.js service proxies /api/v1/ to it
-# over the private network; its rewrite target is fixed when the image is built.
+# Free Render Blueprint for the synthetic Fashion Finder demo.
+# Both services use the Free plan. The API's temporary /tmp data is reseeded at
+# startup; it is intentionally not a persistent real-product catalogue.
 services:
-  - type: pserv
+  - type: web
     name: fashion-finder-api
     runtime: docker
-    plan: 0.5c-512mb # 0.5 CPU, 512 MB; legacy name "starter"
+    plan: free
     region: frankfurt
     dockerfilePath: ./Dockerfile.api
     dockerContext: .
     dockerCommand: /bin/sh /app/scripts/render-api-start.sh
+    healthCheckPath: /api/v1/health
     autoDeployTrigger: checksPass
     buildFilter:
       paths:
@@ -22,21 +21,17 @@ services:
         - manage.py
         - src/**
         - scripts/render-api-start.sh
-    disk:
-      name: fashion-finder-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: PORT
         value: "10000"
       - key: FASHION_FINDER_SECRET_KEY
         generateValue: true
-      # Next.js proxies with the API's internal hostname as the Host header.
       - key: FASHION_FINDER_ALLOWED_HOSTS
-        fromService:
-          type: pserv
-          name: fashion-finder-api
-          property: host
+        value: fashion-finder-api.onrender.com
+      - key: FASHION_FINDER_DATA_DIR
+        value: /tmp/fashion-finder-data
+      - key: FASHION_FINDER_DEMO_MODE
+        value: "1"
 
   - type: web
     name: fashion-finder-web
@@ -51,11 +46,9 @@ services:
       paths:
         - web/**
     envVars:
-      # Used as a Docker build arg; rebuild the web service if the API address changes.
+      # Free web services cannot receive private-network traffic, so use the
+      # API's public HTTPS endpoint. Its name matches the API service above.
       - key: FASHION_FINDER_API_INTERNAL_URL
-        fromService:
-          type: pserv
-          name: fashion-finder-api
-          property: hostport
+        value: https://fashion-finder-api.onrender.com
       - key: HOSTNAME
         value: 0.0.0.0
