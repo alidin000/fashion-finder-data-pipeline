@@ -1,0 +1,61 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec).
+# A Render disk attaches to one service, so the private API service owns the SQLite
+# disk and runs the migration, the hourly feed worker and Gunicorn together
+# (scripts/render-api-start.sh). The public Next.js service proxies /api/v1/ to it
+# over the private network; its rewrite target is fixed when the image is built.
+services:
+  - type: pserv
+    name: fashion-finder-api
+    runtime: docker
+    plan: 0.5c-512mb # 0.5 CPU, 512 MB; legacy name "starter"
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    dockerCommand: /bin/sh /app/scripts/render-api-start.sh
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - Dockerfile.api
+        - .dockerignore
+        - pyproject.toml
+        - README.md
+        - manage.py
+        - src/**
+        - scripts/render-api-start.sh
+    disk:
+      name: fashion-finder-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: FASHION_FINDER_SECRET_KEY
+        generateValue: true
+      # Next.js proxies with the API's internal hostname as the Host header.
+      - key: FASHION_FINDER_ALLOWED_HOSTS
+        fromService:
+          type: pserv
+          name: fashion-finder-api
+          property: host
+
+  - type: web
+    name: fashion-finder-web
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./web/Dockerfile
+    dockerContext: ./web
+    healthCheckPath: /
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - web/**
+    envVars:
+      # Used as a Docker build arg; rebuild the web service if the API address changes.
+      - key: FASHION_FINDER_API_INTERNAL_URL
+        fromService:
+          type: pserv
+          name: fashion-finder-api
+          property: hostport
+      - key: HOSTNAME
+        value: 0.0.0.0
