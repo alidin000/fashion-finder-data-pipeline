@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import random
 import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from io import BytesIO
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import OperationalError, connections
 from django.test import Client
+from PIL import Image
 
 from fashion_finder_data.analytics import metric_report, record_metric
 from fashion_finder_data.api import views
@@ -16,6 +19,7 @@ from fashion_finder_data.api.views import api_context
 from fashion_finder_data.catalogue.models import PriceObservation
 from fashion_finder_data.catalogue.models import RetailerOffer as StoredOffer
 from fashion_finder_data.collectors import SOURCES, lpp_record
+from fashion_finder_data.demo import seed_demo
 from fashion_finder_data.public_catalogue import search_public_catalogue
 from fashion_finder_data.schema import RawProductRecord, RetailerOffer, normalize
 from fashion_finder_data.source_policy import SourcePolicy
@@ -172,6 +176,48 @@ def test_oversized_photo_is_refused_before_the_form_is_parsed(tmp_path) -> None:
         response = Client().post("/api/v1/search/image", {"file": big})
     assert response.status_code == 413
     assert response.json()["detail"] == "image exceeds 5 MB"
+
+
+def _png(width: int, height: int, *, noisy: bool = False) -> bytes:
+    """A noisy image keeps its pixel data large; a flat one compresses to a few KB."""
+    size = (width, height)
+    if noisy:
+        image = Image.frombytes("RGB", size, random.Random(0).randbytes(width * height * 3))
+    else:
+        image = Image.new("RGB", size, "navy")
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _post_photo(content: bytes):
+    photo = SimpleUploadedFile("photo.png", content, content_type="image/png")
+    return Client().post("/api/v1/search/image", {"file": photo})
+
+
+def test_photo_pixels_are_decoded_only_once_photo_search_can_run(tmp_path, monkeypatch) -> None:
+    # A valid header with truncated pixel data only fails once the pixels are decoded.
+    truncated = _png(64, 64, noisy=True)[:6000]
+    with api_context(open_database(tmp_path / "catalog.sqlite")):
+        unavailable = _post_photo(truncated)
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"] == "image search is not configured"
+
+    monkeypatch.setenv("FASHION_FINDER_DEMO_MODE", "1")
+    root = tmp_path / "demo"
+    seed_demo(root)
+    with api_context(open_database(root / "fashion_finder.sqlite"), root / "source-policies.json"):
+        available = _post_photo(truncated)
+    assert available.status_code == 422
+    assert available.json()["detail"] == "cannot decode image"
+
+
+def test_photo_larger_than_the_web_app_sends_is_refused_from_its_header(tmp_path) -> None:
+    # The web app sends at most 1024 px on the long side; 2100 x 2100 is over 4 MP.
+    with api_context(open_database(tmp_path / "catalog.sqlite")):
+        response = _post_photo(_png(2100, 2100))
+    assert response.status_code == 413
+    assert response.json()["detail"] == "image dimensions are too large"
 
 
 def test_a_busy_database_answers_503(tmp_path, monkeypatch) -> None:

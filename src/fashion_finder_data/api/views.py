@@ -33,7 +33,9 @@ from fashion_finder_data.storage import Database
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_UPLOAD_BODY = MAX_IMAGE_BYTES + 256 * 1024  # the photo plus small form fields
-MAX_IMAGE_PIXELS = 20_000_000
+# The web app sends at most 1024 px on the long side; this leaves room for other
+# clients while bounding the memory one decode can take (about 12 MB as RGB).
+MAX_IMAGE_PIXELS = 2048 * 2048
 _api_config: ContextVar[tuple[Database, Path | None] | None] = ContextVar(
     "api_config", default=None
 )
@@ -267,41 +269,47 @@ def search_image(request):
     if len(data) > MAX_IMAGE_BYTES:
         return _error("image exceeds 5 MB", 413)
     expected = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(BytesIO(data)) as decoded:
-                image_format = decoded.format
-                if image_format not in expected:
-                    return _error("image encoding does not match allowed types", 415)
-                if file.content_type != expected[image_format]:
-                    return _error("image MIME type does not match data", 415)
-                if decoded.width * decoded.height > MAX_IMAGE_PIXELS:
-                    return _error("image dimensions are too large", 413)
-                decoded.load()
-                image = decoded.copy()
-    except (
+    # Only image work sits in these try blocks: a server-side fault must not look like
+    # a bad photo.
+    bad_image = (
         UnidentifiedImageError,
         OSError,
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
-    ):
-        # Only decoding sits in this block: a server-side fault must not look like
-        # a bad photo.
+    )
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            decoded = Image.open(BytesIO(data))  # reads the header, not the pixels
+    except bad_image:
         return _error("cannot decode image", 422)
-    database, policy_path = _config()
-    if policy_path is None or not policy_path.is_file():
-        return _error("image search is not configured", 503)
-    policies = load_policies(policy_path)
-    demo_mode = os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
-    if demo_mode:
-        available = demo_index_ready(database, policies)
-    else:
-        available = os.environ.get("FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT") == "1" and (
-            image_index_ready(database, policies, model_path=_image_model_path())
-        )
-    if not available:
-        return _error("image search is not configured", 503)
+    with decoded:
+        image_format = decoded.format
+        if image_format not in expected:
+            return _error("image encoding does not match allowed types", 415)
+        if file.content_type != expected[image_format]:
+            return _error("image MIME type does not match data", 415)
+        if decoded.width * decoded.height > MAX_IMAGE_PIXELS:
+            return _error("image dimensions are too large", 413)
+        # Decoding the pixels is the costly step, so first confirm photo search can run.
+        database, policy_path = _config()
+        if policy_path is None or not policy_path.is_file():
+            return _error("image search is not configured", 503)
+        policies = load_policies(policy_path)
+        demo_mode = os.environ.get("FASHION_FINDER_DEMO_MODE") == "1"
+        if demo_mode:
+            available = demo_index_ready(database, policies)
+        else:
+            available = os.environ.get("FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT") == "1" and (
+                image_index_ready(database, policies, model_path=_image_model_path())
+            )
+        if not available:
+            return _error("image search is not configured", 503)
+        try:
+            decoded.load()
+            image = decoded.copy()
+        except bad_image:
+            return _error("cannot decode image", 422)
     try:
         budget = Decimal(request.POST["max_price"]) if "max_price" in request.POST else None
         search_images = search_demo_image if demo_mode else search_indexed_image
