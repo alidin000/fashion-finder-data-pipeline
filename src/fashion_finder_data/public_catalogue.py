@@ -215,9 +215,12 @@ def search_public_catalogue(
             continue
         if size and not matches_size(size, sizes):
             continue
-        if not matches_terms(terms, row_text(row)):
+        if terms and not matches_terms(terms, row_text(row)):
             continue
-        matches.append((sort_key(sort, row, relevance(terms, row)), row, policy))
+        # Accent folding dominates the cost, so score only when the order uses it. An
+        # empty query scores 0, as relevance() does, so paging cursors stay the same.
+        score = relevance(terms, row) if terms and sort == "relevance" else 0
+        matches.append((sort_key(sort, row, score), row, policy))
     matches.sort(key=lambda item: item[0])
     start = 0
     if cursor:
