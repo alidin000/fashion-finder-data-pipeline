@@ -16,7 +16,12 @@ RUN if [ "$FASHION_FINDER_INSTALL_IMAGE_MODEL" = "1" ]; then \
       python -m pip install --no-cache-dir .; \
     fi
 COPY manage.py ./
+COPY scripts/render-api-start.sh ./scripts/
 RUN python manage.py collectstatic --noinput
+# Render SSH and shell sessions need a named user with a shell and ~/.ssh.
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash app \
+    && install -d -m 0700 -o 1000 -g 1000 /home/app/.ssh
 
 USER 1000:1000
 EXPOSE 8000
