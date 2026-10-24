@@ -1,0 +1,25 @@
+{
+ "https://www.reserved.com/robots.txt": {
+  "status": 200,
+  "headers": {
+   "Content-Type": "text/plain"
+  },
+  "body": "robots.txt"
+ },
+ "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok": {
+  "status": 200,
+  "headers": {
+   "Content-Type": "text/html; charset=utf-8"
+  },
+  "body": "listing-page1.html",
+  "latency": 0.4
+ },
+ "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok?page=2": {
+  "status": 200,
+  "headers": {
+   "Content-Type": "text/html; charset=utf-8"
+  },
+  "body": "listing-page2.html",
+  "latency": 0.9
+ }
+}

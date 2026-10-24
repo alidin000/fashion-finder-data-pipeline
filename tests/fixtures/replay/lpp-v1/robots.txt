@@ -1,0 +1,3 @@
+User-agent: *
+Disallow: /hu/hu/checkout
+Sitemap: https://static.reserved.com/sitemaps/sitemap.xml.gz

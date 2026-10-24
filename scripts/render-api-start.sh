@@ -19,5 +19,8 @@ fashion-finder --data-dir "$data_dir" migrate
 if [ "${FASHION_FINDER_DEMO_MODE:-0}" != "1" ]; then
   fashion-finder-worker --data-dir "$data_dir" --interval-seconds 3600 &
 fi
-exec gunicorn --bind "0.0.0.0:${PORT:-8000}" --workers 2 --threads 2 \
+# One worker by default: Render's free instance has 512 MB, and two workers with the image
+# and text models loaded measured 865 MB (docs/benchmark-results.md). Raise WEB_CONCURRENCY
+# on a larger plan.
+exec gunicorn --bind "0.0.0.0:${PORT:-8000}" --workers "${WEB_CONCURRENCY:-1}" --threads 2 \
   fashion_finder_data.django_project.wsgi:application

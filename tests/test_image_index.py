@@ -87,9 +87,15 @@ def test_offline_index_ranks_and_filters_only_current_permitted_offers(tmp_path,
         )
         filtered = search_indexed_image(database, policies, image, category="jackets")
         assert [item["title"] for item in filtered["items"]] == ["Sample jacket"]
-        assert search_indexed_image(database, policies, image, max_price=Decimal(10000)) == {
-            "items": [],
-            "next_cursor": None,
+        cheap = search_indexed_image(database, policies, image, max_price=Decimal(10000))
+        assert cheap["items"] == [] and cheap["next_cursor"] is None
+        # The colour-layout descriptor cannot read a photo, so nothing is claimed about it.
+        assert cheap["query"] == {
+            "crop_source": "none",
+            "crop": None,
+            "category": None,
+            "colour": None,
+            "alternatives": [],
         }
 
     policy_path = tmp_path / "source-policies.json"

@@ -1,7 +1,11 @@
-"""Source-specific, read-only listing recheck policy.
+"""Source-specific recheck policy.
 
-Category samples cannot prove that a listing disappeared. This module only
-prioritizes direct checks; it never changes offer or stock state.
+Category samples cannot prove that a listing disappeared. ``recheck_report`` only
+prioritizes direct checks and never changes offer or stock state. The refresh
+scheduler (``scheduler.apply_failure``) is the only path that marks an offer
+``unavailable``: after two HTTP 404/410 (or discontinued) answers for its own page
+at least six hours apart. Nothing is deleted, and a later successful check makes
+the offer active again.
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .schema import utc_now
-from .sources import SOURCES, allowed_url
+from .sources import SOURCES, Source, allowed_url
 from .storage import Database, offer_rows
 
 LPP_POLICY = {
@@ -20,44 +24,25 @@ LPP_POLICY = {
     ),
     "missing_from_sample": "recheck",
     "http_403_429_5xx": "recheck",
-    "http_404_410": "manual_review",
+    "http_404_410": "unavailable after 2 answers at least 6 h apart",
 }
 
-SOURCE_POLICY = {
-    "reserved": LPP_POLICY,
-    "sinsay": LPP_POLICY,
-    "mohito": LPP_POLICY,
-    "house": LPP_POLICY,
-    "cropp": LPP_POLICY,
-    "hm": {
-        "web_evidence": "none verified; category cards do not establish stock",
-        "missing_from_sample": "recheck",
-        "http_403_429_5xx": "recheck",
-        "http_404_410": "manual_review",
+GENERIC_POLICY = {
+    "web_evidence": "explicit Product offer availability on an accessible product page",
+    "missing_from_sample": "recheck",
+    "http_403_429_5xx": "recheck",
+    "http_404_410": "unavailable after 2 answers at least 6 h apart",
+}
+STATUS_POLICY = {
+    "blocked": {**GENERIC_POLICY, "web_evidence": "none verified"},
+    "candidate": {
+        **GENERIC_POLICY,
+        "web_evidence": "explicit Product offer availability on an accessible product page"
+        " (source not yet live-verified)",
     },
-    "zara": {
-        "web_evidence": "none verified",
-        "missing_from_sample": "recheck",
-        "http_403_429_5xx": "recheck",
-        "http_404_410": "manual_review",
-    },
-    "pullandbear": {
-        "web_evidence": "none verified",
-        "missing_from_sample": "recheck",
-        "http_403_429_5xx": "recheck",
-        "http_404_410": "manual_review",
-    },
-    "aboutyou": {
+    "feed-only": {
+        **GENERIC_POLICY,
         "web_evidence": "none verified; feed observations require partner access",
-        "missing_from_sample": "recheck",
-        "http_403_429_5xx": "recheck",
-        "http_404_410": "manual_review",
-    },
-    "answear": {
-        "web_evidence": "none verified; feed observations require partner access",
-        "missing_from_sample": "recheck",
-        "http_403_429_5xx": "recheck",
-        "http_404_410": "manual_review",
     },
     "demo": {
         "web_evidence": "synthetic local fixture; no retailer page exists",
@@ -65,7 +50,30 @@ SOURCE_POLICY = {
         "http_403_429_5xx": "manual_review",
         "http_404_410": "manual_review",
     },
+    "practice": {
+        "web_evidence": "public-dataset practice item; no retailer page exists",
+        "missing_from_sample": "manual_review",
+        "http_403_429_5xx": "manual_review",
+        "http_404_410": "manual_review",
+    },
 }
+
+
+def removal_policy(source: Source) -> dict[str, Any]:
+    """Default by platform or status, overridden by the source definition's ``removal``."""
+    base = (
+        LPP_POLICY if source.listing == "lpp" else STATUS_POLICY.get(source.status, GENERIC_POLICY)
+    )
+    policy = {
+        **base,
+        **{key: value for key, value in source.removal.items() if key != "auto_expire"},
+    }
+    if source.removal.get("auto_expire"):
+        policy["auto_expire"] = True
+    return policy
+
+
+SOURCE_POLICY = {key: removal_policy(source) for key, source in SOURCES.items()}
 
 
 def recheck_report(

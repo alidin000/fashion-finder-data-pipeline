@@ -2,9 +2,11 @@
 
 /* eslint-disable @next/next/no-img-element -- Do not proxy retailer images; previews are local blob URLs. */
 
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, memo, PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, memo, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clickEvent, errorEvent, MetricEvent, searchEvent, SearchType } from "../lib/analytics";
 import { Box, boxFromPoints, containedRect, CROP_PRESETS, fitSide, imagePoint, keyBox, overlayRect, pixelBox, Point, Rect, sameGeometry } from "../lib/crop";
+import { Alternative, categoryName, parsePhotoQuery, PhotoQuery, priceFreshness, understandingLabel, variantLabel } from "../lib/photo";
+import { lookReading, LookReading, parseInterpretation } from "../lib/look";
 import { parseSearchInput, SearchInput } from "../lib/query";
 
 type Offer = {
@@ -19,12 +21,14 @@ type Offer = {
   colour_names: string[];
   size_options: string[];
   availability_status: "in_stock" | "out_of_stock" | "unknown";
-  last_checked_at: string;
+  last_checked_at?: string;
   match_type: "same_item" | "close_alternative" | "style_inspiration";
   attribution: string | null;
+  variant_count?: number;
+  variant_colours?: string[];
 };
 
-type SearchResponse = { items: Offer[]; next_cursor: string | null; preferred_category?: string };
+type SearchResponse = { items: Offer[]; next_cursor: string | null; preferred_category?: string; query?: unknown; interpreted_query?: unknown; interpretation?: unknown };
 
 // The preview uses object-fit: contain, so find where the photo really sits in its frame.
 function measure(element: HTMLImageElement | null): { frame: DOMRect; image: Rect } | null {
@@ -37,6 +41,10 @@ function measure(element: HTMLImageElement | null): { frame: DOMRect; image: Rec
 const keepIfSame = <T extends Box | Rect>(next: T | null) => (old: T | null) => (sameGeometry(old, next) ? old : next);
 
 const MAX_UPLOAD_SIDE = 1024;
+// Photo search shows five matches, the number the release gate measures; up to 20 are fetched
+// at once so "Show more" is instant and does not run the model again.
+const PHOTO_SHOWN = 5;
+const PHOTO_FETCHED = 20;
 
 // Re-encode every upload: EXIF rotation is applied, metadata such as GPS is dropped, only the crop is kept
 // and the long side is at most 1024 px. Throws when the browser cannot decode the photo.
@@ -78,7 +86,7 @@ const OFFLINE = "The API is unavailable. Start it locally and try again.";
 const CATALOGUE_PENDING = "Photo matching is awaiting an approved image catalogue. Try text search for now.";
 const FILTER_KEYS = ["category", "colour", "size", "max_price", "source"];
 const money = new Intl.NumberFormat("hu-HU", { maximumFractionDigits: 0 });
-const checkedDate = new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeZone: "Europe/Budapest" });
+const checkedDate = new Intl.DateTimeFormat("hu-HU", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Budapest" });
 const pct = (value: number) => Math.round(value * 100);
 
 function formatHuf(amount: string) {
@@ -87,9 +95,12 @@ function formatHuf(amount: string) {
 }
 
 function sourceName(key: string) {
-  const names: Record<string, string> = { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", sinsay: "Sinsay", mohito: "Mohito", house: "House", cropp: "Cropp", aboutyou: "ABOUT YOU", answear: "Answear", demo: "Local demo" };
+  const names: Record<string, string> = { hm: "H&M", pullandbear: "Pull&Bear", zara: "Zara", reserved: "Reserved", sinsay: "Sinsay", mohito: "Mohito", house: "House", cropp: "Cropp", aboutyou: "ABOUT YOU", answear: "Answear", demo: "Local demo", practice: "Practice data" };
   return names[key] ?? key;
 }
+
+// Demo and practice offers are not for sale and their links do not resolve.
+const SAMPLE_LABELS: Record<string, string> = { demo: "Sample item", practice: "Practice item" };
 
 function matchName(value: Offer["match_type"]) {
   return {
@@ -100,16 +111,45 @@ function matchName(value: Offer["match_type"]) {
 }
 
 // Retailer images get no referrer and fall back to the placeholder when the CDN refuses them or the URL is gone.
-function OfferCard({ item, onOpen }: { item: Offer; onOpen: (sourceKey: string) => void }) {
+function OfferCard({ item, onOpen, now }: { item: Offer; onOpen: (sourceKey: string) => void; now: Date | null }) {
   const [imageFailed, setImageFailed] = useState(false);
   const image = imageFailed ? undefined : item.image_urls[0];
-  return <article className="offer-card"><div className="offer-image">{image ? <img src={image} alt={item.title} lang="hu" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}<span className="match-pill">{matchName(item.match_type)}</span></div><div className="offer-info"><span className="offer-source">{sourceName(item.source_key)}</span><h3 lang="hu">{item.title}</h3><div className="offer-bottom"><strong>{formatHuf(item.price_amount)}</strong>{item.source_key === "demo" ? <span className="demo-item-label">Sample item</span> : <a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen(item.source_key)}>View item<span className="visually-hidden">: <span lang="hu">{item.title}</span> at {sourceName(item.source_key)}</span> <span aria-hidden>↗</span></a>}</div><p className="offer-meta">Checked <span lang="hu">{checkedDate.format(new Date(item.last_checked_at))}</span> · Stock {item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ")}</p>{item.attribution && <p className="offer-meta">{item.attribution}</p>}</div></article>;
+  const variants = variantLabel(item.variant_count ?? 0, item.variant_colours);
+  const freshness = now ? priceFreshness(item.last_checked_at, now) : null;
+  const sample = SAMPLE_LABELS[item.source_key];
+  const stock = item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ");
+  return (
+    <article className="offer-card">
+      <div className="offer-image">
+        {image ? <img src={image} alt={item.title} lang="hu" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}
+        <span className="match-pill">{matchName(item.match_type)}</span>
+        {variants && <span className="variant-pill" title={item.variant_colours?.length ? `Also in: ${item.variant_colours.join(", ")}` : "Similar listings of this product from the same shop"}>{variants}<span className="visually-hidden">{item.variant_colours?.length ? `: also in ${item.variant_colours.join(", ")}` : " similar listings of this product"}</span></span>}
+      </div>
+      <div className="offer-info">
+        <span className="offer-source">{sourceName(item.source_key)}</span>
+        <h3 lang="hu">{item.title}</h3>
+        <div className="offer-bottom">
+          <strong>{formatHuf(item.price_amount)}</strong>
+          {sample ? <span className="demo-item-label">{sample}</span> : <a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen(item.source_key)}>View item<span className="visually-hidden">: <span lang="hu">{item.title}</span> at {sourceName(item.source_key)}</span> <span aria-hidden>↗</span></a>}
+        </div>
+        <p className="offer-meta">
+          {freshness ? <time className={freshness.stale ? "freshness stale" : "freshness"} dateTime={item.last_checked_at} title={`Checked ${checkedDate.format(new Date(item.last_checked_at ?? ""))}`}>{freshness.stale && <span aria-hidden>! </span>}{freshness.text}{freshness.stale && <span className="visually-hidden">; the price may have changed</span>}</time> : null}
+          {freshness ? " · " : ""}Stock {stock}
+        </p>
+        {item.attribution && <p className="offer-meta">{item.attribution}</p>}
+      </div>
+    </article>
+  );
 }
 
 // Memoised so typing in the search form does not re-render every card.
-const OfferGrid = memo(function OfferGrid({ items, onOpen }: { items: Offer[]; onOpen: (sourceKey: string) => void }) {
-  return <div className="offer-grid">{items.map((item) => <OfferCard key={item.id} item={item} onOpen={onOpen} />)}</div>;
+const OfferGrid = memo(function OfferGrid({ items, onOpen, now }: { items: Offer[]; onOpen: (sourceKey: string) => void; now: Date | null }) {
+  return <div className="offer-grid">{items.map((item) => <OfferCard key={item.id} item={item} onOpen={onOpen} now={now} />)}</div>;
 });
+
+function LoadingGrid() {
+  return <div className="offer-grid loading-grid" aria-hidden="true">{[0, 1, 2, 3].map((key) => <div className="offer-card skeleton" key={key}><div className="offer-image" /><div className="offer-info"><span /><span /><span /></div></div>)}</div>;
+}
 
 export default function Home() {
   const [query, setQuery] = useState("");
@@ -120,6 +160,9 @@ export default function Home() {
   const [source, setSource] = useState("");
   const [sortChoice, setSortChoice] = useState<string | null>(null);
   const [items, setItems] = useState<Offer[]>([]);
+  const [shown, setShown] = useState<number | null>(null);
+  const [resultsAt, setResultsAt] = useState<Date | null>(null);
+  const [look, setLook] = useState<LookReading | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [busy, setBusy] = useState(false);
@@ -127,6 +170,9 @@ export default function Home() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [photoMessage, setPhotoMessage] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoQuery, setPhotoQuery] = useState<PhotoQuery | null>(null);
+  const [highlight, setHighlight] = useState<Box | null>(null);
   const [photoCapability, setPhotoCapability] = useState(false);
   const [lookCapability, setLookCapability] = useState(false);
   const [matchByLook, setMatchByLook] = useState(false);
@@ -186,6 +232,12 @@ export default function Home() {
     return imagePoint(event.clientX - measured.frame.left, event.clientY - measured.frame.top, measured.image);
   }
 
+  // The shopper's own box replaces what the last search focused on.
+  function chooseCrop(box: Box | null) {
+    setCrop(box);
+    setHighlight(null);
+  }
+
   // Track one pointer and the primary button only, so a second finger or a right-click cannot hijack the crop.
   function startCrop(event: ReactPointerEvent<HTMLDivElement>) {
     if (drag.current || event.button !== 0) return;
@@ -210,7 +262,7 @@ export default function Home() {
     const box = point ? boxFromPoints(active.start, point) : null;
     drag.current = null;
     setDraftCrop(null);
-    if (box) setCrop(box);
+    if (box) chooseCrop(box);
   }
 
   // The browser took the gesture or capture was lost: drop the drag and keep the previous crop.
@@ -261,8 +313,11 @@ export default function Home() {
     setStatus("loading");
     setError("");
     setPhotoMessage("");
+    setPhotoBusy(false);
     if (!cursor) {
       setItems([]);
+      setShown(null);
+      setLook(null);
       setNextCursor(null);
     }
     const request = new URLSearchParams(params);
@@ -281,7 +336,15 @@ export default function Home() {
       if (stale()) return;
       if (result.items.some((item) => item.source_key === "demo")) setDemoMode(true);
       setItems((old) => (cursor ? [...old, ...result.items] : result.items));
+      setResultsAt(new Date());
       setNextCursor(path === "search" ? result.next_cursor : null);
+      // Look search reports the English words the model received and how it read the rest.
+      if (path === "search/look") {
+        const interpretation = parseInterpretation(result.interpretation);
+        setLook(lookReading(result.interpreted_query, interpretation, params.get("q") ?? ""));
+        // A budget the server found in the words fills an empty budget field for the next search.
+        if (interpretation?.maxPrice != null && !params.has("max_price")) setMaxPrice(String(Math.round(interpretation.maxPrice)));
+      }
       setStatus("ready");
       lastSearchType.current = "text";
       if (cursor) return;
@@ -319,6 +382,8 @@ export default function Home() {
   function choosePhoto(file: File | null) {
     setPhoto(file);
     setPhotoMessage("");
+    setPhotoQuery(null);
+    setHighlight(null);
     setCrop(null);
     setDraftCrop(null);
     setCropMode(false);
@@ -327,63 +392,100 @@ export default function Home() {
     setPreview(file ? URL.createObjectURL(file) : null);
   }
 
-  async function searchPhoto() {
+  // `box` is the area to send (null: the whole photo). A shopper's box, an alternative garment or
+  // "Use whole photo" are sent as crop=manual, so the server does not crop again.
+  async function searchPhoto(box: Box | null = crop, manual = box !== null) {
     if (!photo) return;
     if (!photoCapability) {
       setPhotoMessage(CATALOGUE_PENDING);
       return;
     }
     const { signal, stale } = begin();
-    setPhotoMessage("Checking your photo…");
+    setPhotoBusy(true);
+    // What the last search saw no longer describes this one, even if this one fails.
+    setPhotoQuery(null);
+    setHighlight(null);
+    setPhotoMessage("Looking at your photo…");
+    setStatus("loading");
+    setError("");
+    setItems([]);
+    setLook(null);
     let responseStatus: number | null = null;
+    const fail = (message: string) => {
+      setPhotoMessage(message);
+      setStatus("idle");
+      sendMetric(errorEvent("photo", responseStatus));
+    };
     try {
-      const upload = await normalisedPhoto(photo, crop).catch(() => null);
+      const upload = await normalisedPhoto(photo, box).catch(() => null);
       if (stale()) return;
-      if (!upload) {
-        setPhotoMessage("This photo could not be read. Try a JPEG, PNG or WebP photo.");
-        return;
-      }
+      if (!upload) return fail("This photo could not be read. Try a JPEG, PNG or WebP photo.");
       const data = new FormData();
       data.append("file", upload);
       const filters = filterParams({ query: "", maxPrice });
       for (const [key, value] of filters) data.append(key, value);
+      if (manual) data.append("crop", "manual");
+      data.append("limit", String(PHOTO_FETCHED));
       const response = await fetch(`${API_BASE}/api/v1/search/image`, { method: "POST", body: data, signal });
       responseStatus = response.status;
       if (!response.ok) {
         const detail = await errorDetail(response);
         if (stale()) return;
         const notConfigured = response.status === 503 && (!detail || /not configured/i.test(detail));
-        setPhotoMessage(notConfigured ? CATALOGUE_PENDING : detail ?? (response.status === 413 ? "This photo is too large to upload." : `Photo search failed (${response.status}).`));
-        sendMetric(errorEvent("photo", responseStatus));
-        return;
+        return fail(notConfigured ? CATALOGUE_PENDING : detail ?? (response.status === 413 ? "This photo is too large to upload." : `Photo search failed (${response.status}).`));
       }
       const result = (await response.json()) as SearchResponse;
       if (stale()) return;
+      const understood = parsePhotoQuery(result.query);
+      setPhotoQuery(understood);
+      setHighlight(null);
       setItems(result.items);
+      setShown(Math.min(PHOTO_SHOWN, result.items.length));
+      setResultsAt(new Date());
       setNextCursor(null);
-      setError("");
       setStatus("ready");
       lastSearchType.current = "photo";
-      sendMetric(searchEvent("photo", FILTER_KEYS.some((key) => filters.has(key)), result.items.length));
+      sendMetric(searchEvent("photo", FILTER_KEYS.some((key) => filters.has(key)), Math.min(PHOTO_SHOWN, result.items.length)));
       const grouped = result.preferred_category ? ` Most close matches are ${result.preferred_category}, so those come first.` : "";
       setPhotoMessage((demoMode ? "Showing visual matches from five CC0 sample images. Results are style inspiration, not verified products." : "Showing experimental visual matches. Check each product on the retailer website.") + grouped);
     } catch {
       if (stale()) return;
-      setPhotoMessage(responseStatus === null ? OFFLINE : "The photo search response could not be read.");
-      sendMetric(errorEvent("photo", responseStatus));
+      fail(responseStatus === null ? OFFLINE : "The photo search response could not be read.");
     } finally {
-      if (!stale()) setBusy(false);
+      if (!stale()) {
+        setBusy(false);
+        setPhotoBusy(false);
+      }
     }
+  }
+
+  function searchAlternative(alternative: Alternative) {
+    chooseCrop(alternative.crop);
+    setCropMode(false);
+    void searchPhoto(alternative.crop, true);
+  }
+
+  function searchWholePhoto() {
+    chooseCrop(null);
+    void searchPhoto(null, true);
   }
 
   const sort = sortChoice ?? (query.trim() ? "relevance" : "price-asc");
   const shownCrop = draftCrop ?? crop;
   const cropOverlay = preview && imageRect && shownCrop ? overlayRect(shownCrop, imageRect) : null;
+  // What the server focused on, drawn only while the shopper has no box of their own.
+  const autoBox = !shownCrop && photoQuery?.cropSource === "auto" ? photoQuery.crop : null;
+  const autoOverlay = preview && imageRect && autoBox ? overlayRect(autoBox, imageRect) : null;
+  const highlightOverlay = preview && imageRect && highlight ? overlayRect(highlight, imageRect) : null;
   const cropLabel = crop ? `Crop box: ${pct(crop.x)}% from left, ${pct(crop.y)}% from top, ${pct(crop.width)}% wide, ${pct(crop.height)}% tall` : undefined;
-  const resultCount = `${items.length} ${items.length === 1 ? "offer" : "offers"} shown`;
+  const visibleItems = useMemo(() => (shown === null ? items : items.slice(0, shown)), [items, shown]);
+  const resultCount = `${visibleItems.length} ${visibleItems.length === 1 ? "offer" : "offers"} shown`;
   const emptyTitle = demoMode ? "No sample items found." : "No current offers found.";
+  const reading = understandingLabel(photoQuery);
+  const sawSomething = photoQuery && (reading || photoQuery.cropSource !== "none" || photoQuery.alternatives.length > 0);
   // One always-mounted live region; screen readers announce changes to its text.
-  const announcement = photoMessage || (status === "loading" ? "Finding your options…" : status === "error" ? `Search failed. ${error}` : status === "ready" ? (items.length ? `${resultCount}.` : emptyTitle) : "");
+  const understoodText = reading ? ` We searched for ${reading.text}${reading.unsure ? ", but we are not sure" : ""}.` : "";
+  const announcement = photoMessage ? photoMessage + (photoBusy ? "" : understoodText) : status === "loading" ? "Finding your options…" : status === "error" ? `Search failed. ${error}` : status === "ready" ? (items.length ? `${resultCount}.` : emptyTitle) : "";
 
   return (
     <main>
@@ -428,18 +530,74 @@ export default function Home() {
                 <label>Sort by<select value={sort} onChange={(event) => setSortChoice(event.target.value)}><option value="relevance">Best match</option><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
               </div>
             </form>
-            <div className="photo-panel"><span className="photo-icon" aria-hidden="true">◎</span><span className="eyebrow">HAVE A PHOTO?</span><h3>Start with a look.</h3><p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with locally indexed, permitted offers. Visual ranking is experimental." : "Preview your photo here. Visual matching opens when approved product images are available."}</p><label className="upload-button" htmlFor="photo">Choose a photo <span aria-hidden>＋</span></label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} />{preview && <div className="crop-tools"><button className="crop-toggle" type="button" aria-pressed={cropMode} onClick={toggleCropMode}>Crop</button>{cropMode && <><button className="text-button" type="button" onClick={() => setCrop(CROP_PRESETS.top)}>Top half</button><button className="text-button" type="button" onClick={() => setCrop(CROP_PRESETS.bottom)}>Bottom half</button><button className="text-button" type="button" onClick={() => setCrop(CROP_PRESETS.centre)}>Centre</button></>}{crop && <button className="text-button" type="button" onClick={() => setCrop(null)}>Clear crop</button>}</div>}<div className={`photo-preview${preview ? " has-photo" : ""}${cropMode ? " cropping" : ""}`} onPointerDown={cropMode ? startCrop : undefined} onPointerMove={cropMode ? moveCrop : undefined} onPointerUp={cropMode ? endCrop : undefined} onPointerCancel={cropMode ? cancelCrop : undefined} onLostPointerCapture={cropMode ? cancelCrop : undefined}>{preview ? <img ref={previewImage} src={preview} alt="Your selected clothing photo" draggable={false} onLoad={() => setImageRect(keepIfSame(measure(previewImage.current)?.image ?? null))} /> : <span>Your preview appears here</span>}{cropOverlay && <div className="crop-box" style={{ left: cropOverlay.left, top: cropOverlay.top, width: cropOverlay.width, height: cropOverlay.height }} tabIndex={cropMode && crop ? 0 : undefined} role={cropMode && crop ? "group" : undefined} aria-label={cropMode ? cropLabel : undefined} aria-describedby={cropMode && crop ? "crop-hint" : undefined} onKeyDown={cropMode ? nudgeCrop : undefined} />}</div>{preview && <p className="photo-hint" id="crop-hint">{cropMode ? "Drag across the garment or pick a preset. Arrow keys move the box; Shift+arrows resize it." : crop ? "Only the boxed area is compared." : "Use Crop to compare only the garment."}</p>}{photo && <button className="photo-search" type="button" disabled={busy} onClick={() => void searchPhoto()}>Find similar styles →</button>}{photoMessage && <p className="photo-message">{photoMessage}</p>}</div>
+            <div className="photo-panel" aria-busy={photoBusy}>
+              <span className="photo-icon" aria-hidden="true">◎</span>
+              <span className="eyebrow">HAVE A PHOTO?</span>
+              <h3>Start with a look.</h3>
+              <p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with locally indexed, permitted offers. We focus on the main garment; you can crop it yourself. Visual ranking is experimental." : "Preview your photo here. Visual matching opens when approved product images are available."}</p>
+              <label className="upload-button" htmlFor="photo">{photo ? "Choose another photo" : "Choose a photo"} <span aria-hidden>＋</span></label>
+              <input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} />
+              {preview && (
+                <div className="crop-tools">
+                  <button className="crop-toggle" type="button" aria-pressed={cropMode} onClick={toggleCropMode}>Crop</button>
+                  {cropMode && <><button className="text-button" type="button" onClick={() => chooseCrop(CROP_PRESETS.top)}>Top half</button><button className="text-button" type="button" onClick={() => chooseCrop(CROP_PRESETS.bottom)}>Bottom half</button><button className="text-button" type="button" onClick={() => chooseCrop(CROP_PRESETS.centre)}>Centre</button></>}
+                  {crop && <button className="text-button" type="button" onClick={() => chooseCrop(null)}>Clear crop</button>}
+                </div>
+              )}
+              <div className={`photo-preview${preview ? " has-photo" : ""}${cropMode ? " cropping" : ""}${photoBusy ? " scanning" : ""}`} onPointerDown={cropMode ? startCrop : undefined} onPointerMove={cropMode ? moveCrop : undefined} onPointerUp={cropMode ? endCrop : undefined} onPointerCancel={cropMode ? cancelCrop : undefined} onLostPointerCapture={cropMode ? cancelCrop : undefined}>
+                {preview ? <img ref={previewImage} src={preview} alt="Your selected clothing photo" draggable={false} onLoad={() => setImageRect(keepIfSame(measure(previewImage.current)?.image ?? null))} /> : <span>Your preview appears here</span>}
+                {autoOverlay && <div className="auto-box" style={{ left: autoOverlay.left, top: autoOverlay.top, width: autoOverlay.width, height: autoOverlay.height }} aria-hidden="true"><span>Auto focus</span></div>}
+                {highlightOverlay && <div className="alt-box" style={{ left: highlightOverlay.left, top: highlightOverlay.top, width: highlightOverlay.width, height: highlightOverlay.height }} aria-hidden="true" />}
+                {cropOverlay && <div className="crop-box" style={{ left: cropOverlay.left, top: cropOverlay.top, width: cropOverlay.width, height: cropOverlay.height }} tabIndex={cropMode && crop ? 0 : undefined} role={cropMode && crop ? "group" : undefined} aria-label={cropMode ? cropLabel : undefined} aria-describedby={cropMode && crop ? "crop-hint" : undefined} onKeyDown={cropMode ? nudgeCrop : undefined} />}
+              </div>
+              {preview && <p className="photo-hint" id="crop-hint">{cropMode ? "Drag across the garment or pick a preset. Arrow keys move the box; Shift+arrows resize it." : crop ? "Only the boxed area is compared." : autoBox ? "We compared the boxed garment. Use Crop to choose another area." : "We look for the main garment. Use Crop to choose it yourself."}</p>}
+              {photo && <button className="photo-search" type="button" disabled={busy} onClick={() => void searchPhoto()}>{photoBusy ? "Looking…" : "Find similar styles →"}</button>}
+              {photoMessage && <p className="photo-message">{photoMessage}</p>}
+              {sawSomething && !photoBusy && (
+                <div className="understood" role="group" aria-label="What the photo search saw">
+                  <div className="understood-row">
+                    <span className="understood-label">We searched for</span>
+                    {reading ? <span className={`chip${reading.unsure ? " chip-unsure" : ""}`}>{reading.text}{reading.unsure && <span aria-hidden> ?</span>}</span> : <span className="chip chip-unsure">this look</span>}
+                    {photoQuery?.cropSource === "auto" && <button className="text-button" type="button" disabled={busy} onClick={searchWholePhoto}>Use whole photo</button>}
+                  </div>
+                  {reading?.unsure && <p className="understood-hint">Not sure we got it right. Crop the garment to steer the search.</p>}
+                  {photoQuery && photoQuery.alternatives.length > 0 && (
+                    <div className="understood-row">
+                      <span className="understood-label">Also in this photo</span>
+                      {photoQuery.alternatives.map((alternative) => (
+                        <button key={`${alternative.category}-${alternative.crop.x}-${alternative.crop.y}`} className="chip-button" type="button" disabled={busy} onClick={() => searchAlternative(alternative)} onMouseEnter={() => setHighlight(alternative.crop)} onMouseLeave={() => setHighlight(null)} onFocus={() => setHighlight(alternative.crop)} onBlur={() => setHighlight(null)}>
+                          {categoryName(alternative.category)}<span className="visually-hidden">: search for this item in your photo instead</span> <span aria-hidden>→</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
-        <section className="results-section" aria-labelledby="results-title">
+        <section className="results-section" aria-labelledby="results-title" aria-busy={status === "loading"}>
           <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOUR SEARCH</span><h2 id="results-title">The finds</h2></div><span className="results-count">{status === "ready" ? resultCount : demoMode ? "DEMO CATALOGUE" : "LIVE CATALOGUE"}</span></div>
+          {look && status === "ready" && (
+            <div className="interpreted" role="group" aria-label="How we read your search">
+              <p>Searching for: <strong>{look.searchingFor}</strong>{look.from && <> (from &apos;<span lang="hu">{look.from}</span>&apos;)</>}</p>
+              {(look.chips.length > 0 || look.rankedFor) && (
+                <div className="understood-row">
+                  {look.chips.map((chip) => <span className="chip chip-light" key={chip}>{chip}</span>)}
+                  {look.rankedFor && <span className="ranked-for">Ranked for: {look.rankedFor}</span>}
+                </div>
+              )}
+              {look.notUnderstood && <p className="not-understood">Not understood: <span lang="hu">{look.notUnderstood}</span>. Try other words.</p>}
+            </div>
+          )}
           {status === "idle" && <div className="empty-state"><span>✦</span><h3>Your next favourite starts here.</h3><p>{demoMode ? "Search synthetic items by style, category, colour, or budget." : "Search by style, category, colour, or budget to see approved offers."}</p></div>}
-          {status === "loading" && <div className="empty-state"><h3>Finding your options…</h3></div>}
-          {status === "error" && <div className="empty-state error-state"><h3>Search failed</h3><p>{error}</p></div>}
-          {status === "ready" && items.length === 0 && <div className="empty-state"><span>◇</span><h3>{emptyTitle}</h3><p>{demoMode ? "Try a wider budget or another category." : "Try a wider budget or category. Only approved, recently checked offers appear here."}</p></div>}
-          {items.length > 0 && <OfferGrid items={items} onOpen={openOffer} />}
+          {status === "loading" && items.length === 0 && <><p className="loading-note">{photoBusy ? "Looking at your photo and finding similar styles…" : "Finding your options…"}</p><LoadingGrid /></>}
+          {status === "error" && <div className="empty-state error-state" role="alert"><h3>Search failed</h3><p>{error}</p></div>}
+          {status === "ready" && items.length === 0 && <div className="empty-state"><span>◇</span><h3>{emptyTitle}</h3><p>{shown !== null ? "No permitted offer looks close enough. Try a wider budget, fewer filters, or crop the garment." : demoMode ? "Try a wider budget or another category." : "Try a wider budget or category. Only approved, recently checked offers appear here."}</p></div>}
+          {visibleItems.length > 0 && <OfferGrid items={visibleItems} onOpen={openOffer} now={resultsAt} />}
           {status === "ready" && nextCursor && <button className="load-more" type="button" disabled={busy} onClick={loadMore}>Load more finds ↓</button>}
+          {status === "ready" && shown !== null && shown < items.length && <button className="load-more" type="button" onClick={() => setShown(items.length)}>Show {items.length - shown} more similar styles ↓</button>}
         </section>
         <footer><span>FASHION FINDER</span><p>{demoMode ? "Local demo uses synthetic offers and prices; photo search compares five CC0 examples and cannot verify product identity." : "Prices and availability are checked at the time shown. Final details are on the retailer website."}</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
       </div>

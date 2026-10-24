@@ -66,13 +66,14 @@ class MeanColour:
 
 
 class ColourWords:
-    """Stand-in for the text tower: a colour word maps to that colour."""
+    """Stand-in for the text tower: the first colour word maps to that colour; else red."""
 
     space = FASHION_SIGLIP_SPACE
     length = 3
 
     def encode(self, text: str) -> list[float]:
-        colour = COLOURS.get(canonical_text(text).split()[0], COLOURS["red"])
+        words = [word for word in canonical_text(text).split() if word in COLOURS]
+        colour = COLOURS[words[0]] if words else COLOURS["red"]
         return unit([float(channel) for channel in colour])
 
 

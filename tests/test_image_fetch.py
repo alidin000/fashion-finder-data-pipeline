@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import urllib.error
 import urllib.request
@@ -58,15 +59,38 @@ def add_offer(database, sku: str, images: list[str], availability: str = "unknow
     return next(row["id"] for row in offer_rows(database) if row["source_product_id"] == sku)
 
 
+class FakeClock:
+    """Sleeping advances time, so per-host spacing can be checked exactly."""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.pauses: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.pauses.append(seconds)
+        self.now += seconds
+
+
 class FakeWeb:
-    def __init__(self, image: bytes, tdmrep: dict[str, list] | None = None, headers=None):
+    def __init__(
+        self, image: bytes, tdmrep: dict[str, list] | None = None, headers=None, clock=None
+    ):
         self.image = image
         self.tdmrep = tdmrep or {}
         self.headers = headers or {}
         self.calls: list[str] = []
+        self.clock = clock
+        self.sent: list[tuple[str, float]] = []
+        self.request_headers: dict[str, dict] = {}
 
-    def __call__(self, url: str):
+    def __call__(self, url: str, headers=None):
         self.calls.append(url)
+        self.request_headers[url] = dict(headers or {})
+        if self.clock is not None:
+            self.sent.append((url, self.clock.now))
         if url.endswith("/robots.txt"):
             return ROBOTS, {}
         if url.endswith("/.well-known/tdmrep.json"):
@@ -76,7 +100,10 @@ class FakeWeb:
             return json.dumps(self.tdmrep[origin]).encode(), {}
         if "missing" in url:
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
-        return self.image, self.headers.get(url, {})
+        answer = self.headers.get(url, {})
+        if answer.get("status") == "304":
+            raise urllib.error.HTTPError(url, 304, "Not Modified", {}, None)
+        return answer.get("body", self.image), {k: v for k, v in answer.items() if k != "body"}
 
 
 def test_fetch_writes_a_manifest_that_indexes_even_after_an_item_sells_out(tmp_path) -> None:
@@ -93,12 +120,25 @@ def test_fetch_writes_a_manifest_that_indexes_even_after_an_item_sells_out(tmp_p
     add_offer(database, "C2", ["https://cdn.example.net/other.jpg"])
     add_offer(database, "C3", ["https://static.reserved.com/media/sold.jpg"], "out_of_stock")
     later = add_offer(database, "C4", ["https://static.reserved.com/media/c4.jpg"])
-    web = FakeWeb(demo_image_bytes("demo-003"))
-    pauses: list[float] = []
+    clock = FakeClock()
+    web = FakeWeb(
+        demo_image_bytes("demo-003"),
+        headers={
+            "https://static.reserved.com/media/c4.jpg": {"body": demo_image_bytes("demo-008")}
+        },
+        clock=clock,
+    )
     output = tmp_path / "images"
 
     report = fetch_images(
-        database, output, POLICIES, per_offer=3, delay=3.0, fetch=web, sleep=pauses.append
+        database,
+        output,
+        POLICIES,
+        per_offer=3,
+        delay=3.0,
+        fetch=web,
+        sleep=clock.sleep,
+        clock=clock,
     )
 
     assert report["downloaded"] == 2
@@ -113,7 +153,14 @@ def test_fetch_writes_a_manifest_that_indexes_even_after_an_item_sells_out(tmp_p
         "https://www.reserved.com/.well-known/tdmrep.json",
         PHOTO,
     ]
-    assert pauses == [3.0] * (len(web.calls) - 1)
+    per_host: dict[str, list[float]] = {}
+    for url, at in web.sent:
+        per_host.setdefault(url.split("/")[2], []).append(at)
+    assert all(
+        later - earlier >= 3.0
+        for times in per_host.values()
+        for earlier, later in itertools.pairwise(times)
+    )
     assert f'"offer_id": {coat}' in (output / "manifest.json").read_text(encoding="utf-8")
 
     again = fetch_images(database, output, POLICIES, per_offer=3, fetch=web, sleep=lambda _: 0)
@@ -200,3 +247,91 @@ def test_matrix_ranking_matches_pairwise_cosine_distance() -> None:
     assert [round(value, 5) for value in stacked] == [round(value, 5) for value in slow]
     assert [round(value, 5) for value in cached] == [round(value, 5) for value in slow[1:]]
     assert min(range(3), key=stacked.__getitem__) == 2
+
+
+def test_image_host_crawl_delay_and_lpp_tdmrep_redirect_are_honoured(tmp_path) -> None:
+    database = open_database(tmp_path / "fashion_finder.sqlite")
+    add_offer(database, "C1", [PHOTO])
+    add_offer(database, "C2", ["https://static.reserved.com/media/coat-two.jpg"])
+    clock = FakeClock()
+
+    class LppWeb(FakeWeb):
+        def __call__(self, url: str, headers=None):
+            if url.endswith("/robots.txt"):
+                self.calls.append(url)
+                self.sent.append((url, clock.now))
+                return b"User-agent: *\nCrawl-delay: 10\n", {}
+            if url.endswith("/.well-known/tdmrep.json"):
+                self.calls.append(url)
+                self.sent.append((url, clock.now))
+                # Reserved, Mohito, House and Cropp answer 301 with no Location.
+                raise urllib.error.HTTPError(url, 301, "Moved Permanently", {}, None)
+            return super().__call__(url, headers)
+
+    web = LppWeb(
+        demo_image_bytes("demo-003"),
+        headers={
+            "https://static.reserved.com/media/coat-two.jpg": {"body": demo_image_bytes("demo-009")}
+        },
+        clock=clock,
+    )
+    report = fetch_images(
+        database,
+        tmp_path / "images",
+        POLICIES,
+        delay=2.0,
+        fetch=web,
+        sleep=clock.sleep,
+        clock=clock,
+    )
+    assert report["downloaded"] == 2
+    assert report["failures"] == {}
+    assert report["crawl_delays"] == {"static.reserved.com": 10.0}
+    static = [at for url, at in web.sent if "static.reserved.com" in url]
+    assert min(later - earlier for earlier, later in itertools.pairwise(static)) >= 10.0
+
+
+def test_best_photos_skip_size_charts_and_identical_bytes_are_stored_once(tmp_path) -> None:
+    database = open_database(tmp_path / "fashion_finder.sqlite")
+    chart = "https://static.reserved.com/media/coat-size-chart.jpg"
+    first = add_offer(database, "C1", [chart, PHOTO])
+    second = add_offer(database, "C2", ["https://static.reserved.com/media/same-photo.jpg"])
+    web = FakeWeb(demo_image_bytes("demo-003"))
+    report = fetch_images(
+        database, tmp_path / "images", POLICIES, per_offer=1, fetch=web, sleep=lambda _: 0
+    )
+    assert chart not in web.calls  # the packshot, not the size chart, fills the one slot
+    assert (report["downloaded"], report["deduplicated"]) == (1, 1)
+    manifest = json.loads((tmp_path / "images" / "manifest.json").read_text(encoding="utf-8"))
+    paths = {entry["offer_id"]: entry["image_path"] for entry in manifest}
+    assert paths[first] == paths[second]
+
+
+def test_revalidation_sends_validators_and_keeps_unchanged_files(tmp_path) -> None:
+    database = open_database(tmp_path / "fashion_finder.sqlite")
+    add_offer(database, "C1", [PHOTO])
+    web = FakeWeb(demo_image_bytes("demo-003"), headers={PHOTO: {"etag": '"v1"'}})
+    output = tmp_path / "images"
+    fetch_images(database, output, POLICIES, fetch=web, sleep=lambda _: 0)
+    written = next((output / "reserved").iterdir())
+    stamp = written.stat().st_mtime_ns
+    cache = json.loads((output / "image-cache.json").read_text(encoding="utf-8"))
+    cache[PHOTO]["fetched_at"] = "2026-01-01T00:00:00+00:00"  # fetched long ago
+    (output / "image-cache.json").write_text(json.dumps(cache), encoding="utf-8")
+    web.headers[PHOTO] = {"status": "304"}
+    again = fetch_images(
+        database, output, POLICIES, fetch=web, sleep=lambda _: 0, revalidate_after_days=7
+    )
+    assert again["unchanged_on_revalidation"] == 1
+    assert web.request_headers[PHOTO] == {"If-None-Match": '"v1"'}
+    assert written.stat().st_mtime_ns == stamp
+
+
+def test_ai_opt_out_header_blocks_a_photo(tmp_path) -> None:
+    database = open_database(tmp_path / "fashion_finder.sqlite")
+    add_offer(database, "C1", [PHOTO])
+    web = FakeWeb(
+        demo_image_bytes("demo-003"), headers={PHOTO: {"x-robots-tag": "noai, noimageai"}}
+    )
+    report = fetch_images(database, tmp_path / "images", POLICIES, fetch=web, sleep=lambda _: 0)
+    assert report["failures"] == {"image opts out of AI use (X-Robots-Tag)": 1}

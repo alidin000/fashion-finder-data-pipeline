@@ -2,6 +2,44 @@
 
 Checked 2026-10-12 from the local development environment. These are access and extraction observations, not permission to reuse retailer content.
 
+## 2026-10-24: new collector, small live smoke test
+
+Run from the local development network with the new collector (`FashionFinderBot/0.1.0`,
+contact URL = repository), on three sources the repo already treats as reviewed. Each
+host saw at most 17 requests in total, at least 10 s apart (robots.txt `Crawl-delay: 10`
+on Reserved and Mohito; the 10 s default on Sinsay, which sets none). No 403, 429 or
+challenge page appeared. The scraped data stayed in a scratch directory outside Git.
+
+| Step (UTC) | Command | Reserved | Sinsay | Mohito |
+|---|---|---|---|---|
+| Discovery, 19:18 | `collect <shop> --limit 30 --max-requests 6` | 4 requests (robots 200, tdmrep 301, category 301 then 200); 30 valid, 0 rejected | 3 requests (tdmrep 404); 30 valid, 0 rejected | 3 requests (tdmrep 301); 30 valid, 0 rejected |
+| Benchmark, 19:20 | `benchmark-extraction --per-source 8 --max-requests 12` | JSON-LD on 8/8 product pages; price 8/8, sizes 0/8; p50/p95 655/828 ms | JSON-LD 8/8; price 8/8, sizes 0/8; 792/967 ms | JSON-LD 8/8; price 8/8, sizes 0/8; 482/665 ms |
+| Refresh, 19:22 | `refresh --limit 90 --max-requests 6` (all 90 forced due) | 3 requests (robots, page 1, one jump); 30 due checked: 30 unchanged (no write); whole category read: 425 new | 30 unchanged; 456 new | 30 unchanged; 185 new |
+
+- **Field coverage** of the 1,156 stored offers after the refresh (`fashion-finder
+  quality`): price, currency, image, brand, colour, size, SKU, known availability and
+  mapped category 100 % for all three; regular (struck-through) price 14.3 % Reserved,
+  25.9 % Sinsay, 38.1 % Mohito; description 0 % (the listing has none). Availability:
+  1,155 in stock, 1 out of stock.
+- **TDMRep:** `/.well-known/tdmrep.json` answered 301 without a target on Reserved and
+  Mohito and 404 on Sinsay: no reservation. The text collector checks it once per host
+  and caches it for 7 days.
+- **Product pages vs listings:** LPP product pages carry JSON-LD with price but no sizes;
+  the category listing's embedded JSON has sizes and per-size stock. LPP shops therefore
+  refresh through their listings (`refresh = { strategy = "listing" }`): 3 requests
+  re-observed 1,156 offers. JavaScript was not needed anywhere.
+- **Cycle estimate** (listing strategy, 10 s spacing): the 28/29/14 curated categories
+  of Reserved/Sinsay/Mohito need 56/58/28 requests, under 0.2 h per shop per cycle;
+  one connection per shop is enough for a 12-hour interval.
+- **Robots-only checks** for the new candidates, 18:19 UTC, one request each:
+  sportano.hu allows `*` except `/guestwish`, `/rma/guest/login/`, `/catalog/*`, two
+  static paths and `/blog/wp-admin/`, and lists `https://sportano.hu/sitemap/sitemap_hu.xml`; ecipo.hu and modivo.hu allow `/p/` and
+  plain `/c/` category paths and list no sitemap. No product page of these shops was
+  fetched; they stay unverified candidates.
+
+## Earlier checks (2026-10-12/13)
+
+
 An additional 2026-10-12 diagnostic from this environment returned HTTP 403 for
 each Zara, H&M and Pull&Bear starting category, both via ordinary `curl` and via
 standard headless Chromium (Playwright). Their `robots.txt` URLs also returned

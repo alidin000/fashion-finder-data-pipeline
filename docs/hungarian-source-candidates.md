@@ -113,3 +113,37 @@ Thirty consented shopping tasks must still come from real participants. Public
 product listings or fashion datasets cannot stand in for participant consent,
 usefulness labels, and task-completion evidence. The [evaluation guide](task-evaluation-guide.md)
 describes the private, pseudonymous report format.
+
+## Web-collection candidates (2026-10-24)
+
+Configured in `src/fashion_finder_data/source_definitions.toml` with
+`status = "candidate"`: they never run in `collect all`, need an explicit command, and
+their source policies in `config/source-policies.example.json` stay **pending**. Each
+robots.txt was read on 2026-10-24 with the `FashionFinderBot` token (one request per
+host). The [shop survey](data-research/hungarian-shop-survey.md) found no
+automated-access clause in search excerpts of their terms; the full terms were not read
+and must be read before any approval.
+
+| Source | Discovery | Evidence | Still needed |
+|---|---|---|---|
+| Sportano (`sportano`) | Sitemap from robots.txt: `https://sportano.hu/sitemap/sitemap_hu.xml`, children matching `product` | Survey: Product JSON-LD with HUF offers | Child sitemap names unverified (a run that matches none lists them); terms; benchmark |
+| eCipő (`ecipo`) | `--url` with a category page; product links under `/p/` | Survey: `ProductGroup` JSON-LD (now supported), " \| Ecipo.hu" title suffix (stripped by config) | A category URL (none documented, no sitemap in robots.txt); terms; benchmark |
+| Modivo (`modivo`) | `--url` with a category page; product links under `/p/` | Survey: `ProductGroup` JSON-LD; priceless category `AggregateOffer` (now ignored on listings) | As eCipő |
+
+### Candidates not added
+
+| Shop | Reason |
+|---|---|
+| Answear | Web collection is the owner's decision; stays feed-only (`answear`). |
+| ABOUT YOU | Client-rendered product pages; feed only (`aboutyou`). |
+| Footshop | No JSON-LD or price meta; use its CJ XML feed with `map-xml-feed`. |
+| Sports Direct HU | Its host was not recorded in the research. Localised JSON-LD types (`Termék`, `Ajánlat`) are now understood, so it should be configuration-only once the host, robots.txt and terms are checked. |
+| Stradivarius | JSON-LD labels HUF amounts as `EUR`; sister brands block the collector. |
+| CCC | No prices or JSON-LD in server HTML; would need browser rendering. |
+| Zalando | robots.txt disallows GPTBot, CCBot, ClaudeBot and Google-Extended (an AI-use signal); unverified. |
+| Deichmann | Sampled product URL had expired; unverified. |
+| Decathlon, Fashion Days, Mango, Bershka, Sportisimo | Blocked or challenged the survey (403, CAPTCHA, 429, Akamai, Cloudflare); Sportisimo also sets `ai-train=no`. |
+| bonprix | robots.txt disallows product pages; use its Tradedoubler feed. |
+| SHEIN | Terms ban automated access. |
+| C&A, Humanic, Tally Weijl, P&C, New Yorker, Orsay, LC Waikiki, KiK, Bibloo, Notino | No Hungarian clothing shop, or out of scope (survey). |
+| Zara, H&M, Pull&Bear | Already configured as `status = "blocked"` (HTTP 403 in October 2026); excluded from `collect all`. |

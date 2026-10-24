@@ -1,0 +1,268 @@
+# Hungarian source definitions: one [sources.<key>] table per storefront or feed.
+#
+# Adding a shop that publishes schema.org structured data is mostly configuration.
+# See docs/scraper.md ("Add a source"). Every field below is validated by
+# `sources.load_definitions`; an invalid file stops the program at import time.
+#
+# status:
+#   reviewed   - live collection verified and documented in docs/live-source-status.md
+#   blocked    - the shop blocked bounded checks from this environment; never in `collect all`
+#   candidate  - configured from the research docs; not live-verified; never in `collect all`
+#   feed-only  - only an authorized local feed may supply offers; no crawling
+#   demo       - synthetic local data
+#
+# A definition never grants publication. Source policies (config/source-policies*.json)
+# stay pending until the owner records evidence and approves them.
+
+[sources.zara]
+name = "Zara"
+host = "zara.com"
+status = "blocked"
+category_url = "https://www.zara.com/hu/en/woman-jackets-l1114.html"
+category = "jackets"
+product_pattern = '-p\d+\.html(?:$|\?)'
+notes = "HTTP 403 for robots.txt, category and browser checks on 2026-10-12."
+
+[sources.hm]
+name = "H&M"
+host = "hm.com"
+status = "blocked"
+category_url = "https://www2.hm.com/hu_hu/noi/vasarlas-termek-szerint/dzsekik/dzsekik.html"
+category = "jackets"
+product_pattern = 'productpage\.\d+\.html(?:$|\?)'
+listing = "hm-cards"
+notes = "Live Scrapy check returned HTTP 403 for robots.txt and the category on 2026-10-12."
+removal = { web_evidence = "none verified; category cards do not establish stock" }
+
+[sources.reserved]
+name = "Reserved"
+host = "reserved.com"
+platform = "lpp"
+category_url = "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok"
+category = "coats"
+notes = "Embedded LPP listing verified live on 2026-10-13."
+category_paths = { "/hu/hu/noi/ruhazat/kabatok" = "coats", "/hu/hu/noi/kabatok" = "coats", "/hu/hu/noi/ruhak" = "dresses", "/hu/hu/noi/puloverek" = "sweaters" }
+# Curated clothing categories from docs/data-research/lpp-catalogue-capacity.md.
+category_urls = [
+  "https://www.reserved.com/hu/hu/noi/kabatok",
+  "https://www.reserved.com/hu/hu/noi/puloverek",
+  "https://www.reserved.com/hu/hu/noi/ruhak",
+  "https://www.reserved.com/hu/hu/noi/ingek-bluzok",
+  "https://www.reserved.com/hu/hu/noi/farmerek",
+  "https://www.reserved.com/hu/hu/noi/nadragok",
+  "https://www.reserved.com/hu/hu/noi/polok",
+  "https://www.reserved.com/hu/hu/noi/blezerek-mellenyek",
+  "https://www.reserved.com/hu/hu/noi/melegitofelsok",
+  "https://www.reserved.com/hu/hu/noi/szoknyak",
+  "https://www.reserved.com/hu/hu/noi/rovidnadragok",
+  "https://www.reserved.com/hu/hu/noi/szettek",
+  "https://www.reserved.com/hu/hu/ferfi/dzsekik-kabatok",
+  "https://www.reserved.com/hu/hu/ferfi/nadragok",
+  "https://www.reserved.com/hu/hu/ferfi/farmerek",
+  "https://www.reserved.com/hu/hu/ferfi/puloverek",
+  "https://www.reserved.com/hu/hu/ferfi/ingek",
+  "https://www.reserved.com/hu/hu/ferfi/felsok",
+  "https://www.reserved.com/hu/hu/ferfi/polok",
+  "https://www.reserved.com/hu/hu/ferfi/galleros-polok",
+  "https://www.reserved.com/hu/hu/ferfi/zakok-blezerek",
+  "https://www.reserved.com/hu/hu/ferfi/oltonyok",
+  "https://www.reserved.com/hu/hu/lany/5-13-eves",
+  "https://www.reserved.com/hu/hu/lany/1-6-eves",
+  "https://www.reserved.com/hu/hu/lany/bebi-0-12-honap",
+  "https://www.reserved.com/hu/hu/fiu/5-13-eves",
+  "https://www.reserved.com/hu/hu/fiu/1-6-eves",
+  "https://www.reserved.com/hu/hu/fiu/bebi-0-12-honap",
+]
+
+[sources.sinsay]
+name = "Sinsay"
+host = "sinsay.com"
+platform = "lpp"
+category_url = "https://www.sinsay.com/hu/hu/noi/ruhazat/dzsekik"
+category = "jackets"
+notes = "Embedded LPP listing verified live on 2026-10-13. robots.txt sets no Crawl-delay."
+category_urls = [
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/dzsekik",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/puloverek",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/melegito-felsok",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/nadragok",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/farmerek",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/ruhak",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/szoknyak",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/polok-es-topok",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/ingek",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/bluzok",
+  "https://www.sinsay.com/hu/hu/noi/ruhazat/rovidnadragok",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/dzsekik",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/melegito-felsok",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/puloverek",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/nadragok",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/farmerek",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/polok",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/ingek",
+  "https://www.sinsay.com/hu/hu/ferfi/ruhazat/rovidnadragok",
+  "https://www.sinsay.com/hu/hu/gyermek/k-outerwear",
+  "https://www.sinsay.com/hu/hu/gyermek/k-jogging-tops",
+  "https://www.sinsay.com/hu/hu/gyermek/k-trousers",
+  "https://www.sinsay.com/hu/hu/gyermek/k-jeans",
+  "https://www.sinsay.com/hu/hu/gyermek/k-tshirts",
+  "https://www.sinsay.com/hu/hu/gyermek/k-dresses",
+  "https://www.sinsay.com/hu/hu/gyermek/k-body",
+  "https://www.sinsay.com/hu/hu/gyermek/k-jumpsuits",
+  "https://www.sinsay.com/hu/hu/gyermek/shorts",
+  "https://www.sinsay.com/hu/hu/gyermek/sets",
+]
+
+[sources.mohito]
+name = "Mohito"
+host = "mohito.com"
+platform = "lpp"
+category_url = "https://www.mohito.com/hu/hu/ruhazat/kabatok"
+category = "coats"
+notes = "Embedded LPP listing verified live on 2026-10-13."
+category_urls = [
+  "https://www.mohito.com/hu/hu/ruhazat/kabatok",
+  "https://www.mohito.com/hu/hu/ruhazat/puloverek",
+  "https://www.mohito.com/hu/hu/ruhazat/farmer",
+  "https://www.mohito.com/hu/hu/ruhazat/ruhak-overalok",
+  "https://www.mohito.com/hu/hu/ruhazat/nadragok",
+  "https://www.mohito.com/hu/hu/ruhazat/polok-topok",
+  "https://www.mohito.com/hu/hu/ruhazat/bluzok",
+  "https://www.mohito.com/hu/hu/ruhazat/ingek",
+  "https://www.mohito.com/hu/hu/ruhazat/blezerek",
+  "https://www.mohito.com/hu/hu/ruhazat/szoknyak",
+  "https://www.mohito.com/hu/hu/ruhazat/rovidnadrag",
+  "https://www.mohito.com/hu/hu/ruhazat/melegitofelsok",
+  "https://www.mohito.com/hu/hu/ruhazat/oltonyok",
+  "https://www.mohito.com/hu/hu/ruhazat/szettek-eu",
+]
+
+[sources.house]
+name = "House"
+host = "housebrand.com"
+platform = "lpp"
+category_url = "https://www.housebrand.com/hu/hu/noi/ruhak/kabatok-dzsekik"
+notes = "Embedded LPP listing verified live on 2026-10-13. Its product sitemap is stale."
+# House uses `ruhak` ("clothes") for its whole clothing tree, not for dresses.
+slug_categories = { "ruhak" = "" }
+category_urls = [
+  "https://www.housebrand.com/hu/hu/noi/ruhak/kabatok-dzsekik",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/felsok",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/puloverek-kardiganok",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/nadragok",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/farmerek",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/polok-topok",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/ingek",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/ruhak-overallok",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/bluzok",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/szoknyak",
+  "https://www.housebrand.com/hu/hu/noi/ruhak/rovidnadragok",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/kabatok-dzsekik",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/felsok",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/puloverek",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/nadragok",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/farmerek",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/polok",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/ingek",
+  "https://www.housebrand.com/hu/hu/ferfi/ruhak/rovidnadragok",
+]
+
+[sources.cropp]
+name = "Cropp"
+host = "cropp.com"
+platform = "lpp"
+category_url = "https://www.cropp.com/hu/hu/noi/ruhazat/dzsekik-kabatok"
+notes = "Embedded LPP listing verified live on 2026-10-13."
+category_urls = [
+  "https://www.cropp.com/hu/hu/noi/ruhazat/dzsekik-kabatok",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/jogging-topok",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/farmerek",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/polok-topok",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/nadragok",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/puloverek",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/ruhak",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/ingek",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/szoknyak",
+  "https://www.cropp.com/hu/hu/noi/ruhazat/sortok",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/dzsekik-kabatok",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/jogging-topok",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/farmerek",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/polok",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/nadragok",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/puloverek",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/ingek",
+  "https://www.cropp.com/hu/hu/ferfi/ruhazat/sortok",
+]
+
+[sources.pullandbear]
+name = "Pull&Bear"
+host = "pullandbear.com"
+status = "blocked"
+category_url = "https://www.pullandbear.com/hu/noi/ruhazat/bluzok-es-ingek-n6525"
+category = "shirts"
+product_pattern = '-p\d+\.html(?:$|\?)'
+notes = "No product links over HTTP; Chromium received HTTP 403 on 2026-10-12."
+
+# --- Candidates added on 2026-10-24 (policy pending; not in `collect all`) ---------------
+# robots.txt for each host was read on 2026-10-24 with the FashionFinderBot token and
+# allows the configured paths. docs/data-research/hungarian-shop-survey.md found no
+# automated-access clause in search excerpts of their terms; the full terms were not read.
+
+[sources.sportano]
+name = "Sportano"
+host = "sportano.hu"
+hosts = ["sportano.hu", "www.sportano.hu"]
+status = "candidate"
+market_paths = ["/"]
+# From robots.txt (2026-10-24). Child sitemaps are filtered by `sitemap_follow`; the
+# research counted 23 product sitemaps but did not record their names, so this filter
+# is unverified: a run that matches none reports the child names it saw.
+sitemaps = ["https://sportano.hu/sitemap/sitemap_hu.xml"]
+sitemap_follow = 'product'
+notes = "Product JSON-LD with HUF offers per the 2026-10-13 survey. Sitemap discovery only."
+
+[sources.ecipo]
+name = "eCipő"
+host = "ecipo.hu"
+hosts = ["ecipo.hu", "www.ecipo.hu"]
+status = "candidate"
+market_paths = ["/"]
+product_pattern = '^https://(?:www\.)?ecipo\.hu/p/'
+extraction = { title_suffix = '\s*\|\s*Ecipo\.hu\s*$' }
+notes = "ProductGroup JSON-LD. No sitemap in robots.txt and no documented category URL: pass --url."
+
+[sources.modivo]
+name = "Modivo"
+host = "modivo.hu"
+hosts = ["modivo.hu", "www.modivo.hu"]
+status = "candidate"
+market_paths = ["/"]
+product_pattern = '^https://(?:www\.)?modivo\.hu/p/'
+notes = "ProductGroup JSON-LD; category pages carry a priceless AggregateOffer node. Pass --url."
+
+# --- Feed-only and synthetic sources ---------------------------------------------------
+
+[sources.aboutyou]
+name = "ABOUT YOU"
+host = "aboutyou.hu"
+hosts = ["aboutyou.hu", "www.aboutyou.hu"]
+status = "feed-only"
+market_paths = ["/p/"]
+
+[sources.answear]
+name = "Answear"
+host = "answear.hu"
+hosts = ["answear.hu", "www.answear.hu"]
+status = "feed-only"
+market_paths = ["/p/"]
+
+[sources.demo]
+name = "Demo"
+host = "fashion-finder-demo.invalid"
+status = "demo"
+
+# Public-dataset practice catalogue (fashion_finder_data.practice); never a retailer.
+[sources.practice]
+name = "Practice data"
+host = "practice.invalid"
+status = "practice"

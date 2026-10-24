@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .public_catalogue import _safe_image_url, _visible
 from .source_policy import SourcePolicy
-from .sources import PRODUCTION_SOURCES, SOURCES
+from .sources import NON_RETAIL_SOURCES, PRODUCTION_SOURCES, SOURCES
 from .storage import Database, offer_rows
 from .taxonomy import CATEGORIES
 
@@ -131,8 +131,8 @@ def write_audit_sample(
     _validate_category(category)
     if source_key not in SOURCES:
         raise ValueError(f"unknown source: {source_key}")
-    if source_key == "demo":
-        raise ValueError("demo offers cannot be used for a release audit")
+    if source_key in NON_RETAIL_SOURCES:
+        raise ValueError(f"{source_key} offers cannot be used for a release audit")
     if not 1 <= count <= 100:
         raise ValueError("count must be between 1 and 100")
     current = now or datetime.now(UTC)

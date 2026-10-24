@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .normalisation import (
+    clean_colours,
+    clean_list,
+    clean_text,
+    normalise_availability,
+    parse_price_text,
+)
 from .sources import SourceKey, is_hungarian_source_url
-from .taxonomy import normalize_category
+from .taxonomy import CATEGORIES, normalize_category
 
 
 def utc_now() -> datetime:
@@ -37,29 +44,16 @@ def canonical_url(value: str) -> str:
 
 
 def parse_money(value: Any, currency: str | None = None) -> Decimal | None:
+    """Exact price from a number or text such as ``12 990 Ft``; None when absent.
+
+    A currency word in the text must match ``currency``: ``29.99 EUR`` is never a
+    HUF price.
+    """
     if value is None or value == "":
         return None
     if isinstance(value, bool):
         raise TypeError("price must be numeric")
-    if isinstance(value, float):
-        raise TypeError("binary floating-point prices are not accepted")
-    if isinstance(value, Decimal):
-        result = value
-    else:
-        raw = str(value).replace("\u00a0", " ").replace("\u202f", " ").strip()
-        raw = re.sub(r"\s*(Ft|HUF|EUR|€)\s*$", "", raw, flags=re.IGNORECASE)
-        raw = raw.replace(" ", "")
-        if currency == "HUF" and re.fullmatch(r"\d{1,3}(?:[,.]\d{3})+", raw):
-            raw = raw.replace(",", "").replace(".", "")
-        if not re.fullmatch(r"\d+(?:[.,]\d{1,2})?", raw):
-            raise ValueError(f"invalid or ambiguous price: {value!r}")
-        try:
-            result = Decimal(raw.replace(",", "."))
-        except InvalidOperation as exc:
-            raise ValueError("invalid price") from exc
-    if not result.is_finite() or result < 0:
-        raise ValueError("price must be finite and nonnegative")
-    return result
+    return parse_price_text(value, currency)[0]
 
 
 class RawProductRecord(BaseModel):
@@ -159,35 +153,31 @@ def normalize(raw: RawProductRecord) -> RetailerOffer:
     currency = str(data["currency"]).strip().upper() if data.get("currency") else None
     price = parse_money(data.get("price"), currency)
     original_price = parse_money(data.get("original_price"), currency)
-    availability = str(data.get("availability") or "").lower()
-    if availability.endswith("/instock"):
-        availability = "in_stock"
-    elif availability.endswith("/outofstock"):
-        availability = "out_of_stock"
-    elif availability not in {"in_stock", "out_of_stock"}:
-        availability = "unknown"
-
-    def strings(value: Any) -> list[str]:
-        values = value if isinstance(value, list) else [value] if value else []
-        return [str(item).strip() for item in values if item and str(item).strip()]
-
+    if original_price is not None and (price is None or original_price <= price):
+        original_price = None  # a "regular" price at or below the current one is no discount
+    source_category = clean_text(data.get("category"))
+    category_key = data.get("category_key")
     return RetailerOffer(
         source_key=raw.source_key,
         market_code=raw.market_code,
         source_product_id=str(data["sku"]).strip() if data.get("sku") else None,
         source_url=source_url,
         canonical_url=canonical,
-        title=str(data.get("name") or "").strip(),
-        brand=str(data["brand"]).strip() if data.get("brand") else None,
-        category=normalize_category(str(data["category"])) if data.get("category") else None,
-        source_category=str(data["category"]).strip() if data.get("category") else None,
-        description=str(data["description"]).strip() if data.get("description") else None,
+        title=clean_text(data.get("name")) or "",
+        brand=clean_text(data.get("brand")),
+        category=category_key
+        if category_key in CATEGORIES
+        else normalize_category(source_category)
+        if source_category
+        else None,
+        source_category=source_category,
+        description=clean_text(data.get("description")),
         price_amount=price,
         currency=currency,
         original_price_amount=original_price,
         image_urls=image_urls(data.get("images"), source_url),
-        colour_names=strings(data.get("colours")),
-        size_options=strings(data.get("sizes")),
-        availability_status=availability,
+        colour_names=clean_colours(data.get("colours")),
+        size_options=clean_list(data.get("sizes")),
+        availability_status=normalise_availability(data.get("availability")),
         source_fetched_at=raw.fetched_at,
     )

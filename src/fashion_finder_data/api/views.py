@@ -22,6 +22,7 @@ from fashion_finder_data.analytics import record_metric
 from fashion_finder_data.catalogue.models import RetailerOffer
 from fashion_finder_data.demo_images import demo_image_bytes, demo_index_ready, search_demo_image
 from fashion_finder_data.image_index import (
+    RESULT_LIMIT,
     image_index_ready,
     search_indexed_image,
     search_indexed_text,
@@ -30,12 +31,15 @@ from fashion_finder_data.image_index import (
 from fashion_finder_data.public_catalogue import public_offer, search_public_catalogue
 from fashion_finder_data.source_policy import load_policies
 from fashion_finder_data.storage import Database
+from fashion_finder_data.translation import get_translator
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_UPLOAD_BODY = MAX_IMAGE_BYTES + 256 * 1024  # the photo plus small form fields
 # The web app sends at most 1024 px on the long side; this leaves room for other
 # clients while bounding the memory one decode can take (about 12 MB as RGB).
 MAX_IMAGE_PIXELS = 2048 * 2048
+# Photo search returns five matches unless the shopper asks for more ("show more").
+MAX_PHOTO_RESULTS = 20
 _api_config: ContextVar[tuple[Database, Path | None] | None] = ContextVar(
     "api_config", default=None
 )
@@ -224,10 +228,26 @@ def search_look(request):
             size=params.get("size") or None,
             max_price=Decimal(params["max_price"]) if params.get("max_price") else None,
             **_text_model_paths(),
+            **_translation_options(),
         )
     except (ValueError, InvalidOperation) as exc:
         return _error(str(exc), 400)
     return JsonResponse(result)
+
+
+def _translation_options() -> dict:
+    """The offline translation model fills dictionary gaps when it is configured.
+
+    A missing or unpinned model leaves look search on the dictionary alone.
+    """
+    directory = os.environ.get("FASHION_FINDER_TRANSLATION_MODEL_DIR")
+    if not directory:
+        return {}
+    try:
+        get_translator(Path(directory))
+    except ValueError:
+        return {}
+    return {"translate": "dictionary+mt", "translation_model_dir": Path(directory)}
 
 
 @_busy_as_503
@@ -257,9 +277,19 @@ def search_image(request):
         "colour": 80,
         "size": 40,
         "max_price": 40,
+        "crop": 10,
+        "limit": 3,
     }.items():
         if len(request.POST.get(key, "")) > maximum:
             return _error(f"{key} is too long", 400)
+    # "manual": the browser already cropped the photo to the shopper's box, so the
+    # server must not crop again. Without it the server may focus on one garment.
+    crop = request.POST.get("crop") or "auto"
+    if crop not in {"auto", "manual"}:
+        return _error("crop must be auto or manual", 400)
+    limit = request.POST.get("limit") or str(RESULT_LIMIT)
+    if not limit.isdigit() or not 1 <= int(limit) <= MAX_PHOTO_RESULTS:
+        return _error(f"limit must be between 1 and {MAX_PHOTO_RESULTS}", 400)
     file = request.FILES.get("file")
     if file is None:
         return _error("file required", 400)
@@ -321,10 +351,22 @@ def search_image(request):
         }
         if not demo_mode:
             options["source"] = request.POST.get("source") or None
-            options["model_path"] = _image_model_path()
+            options["manual_crop"] = crop == "manual"
+            options["limit"] = int(limit)
+            # The text model, when configured, lets the server find and name the garment.
+            options.update(_text_model_paths())
         result = search_images(database, policies, image, **options)
     except (InvalidOperation, ValueError) as exc:
         return _error(str(exc), 400)
+    if demo_mode:
+        # The demo's colour-layout descriptor cannot read a photo: nothing to report.
+        result["query"] = {
+            "crop_source": "manual" if crop == "manual" else "none",
+            "crop": None,
+            "category": None,
+            "colour": None,
+            "alternatives": [],
+        }
     return JsonResponse(result)
 
 

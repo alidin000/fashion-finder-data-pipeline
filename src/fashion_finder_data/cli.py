@@ -10,21 +10,29 @@ from pathlib import Path
 
 from . import __version__
 from .audit import audit_report
-from .collectors import MAX_LIMIT, crawl
+from .collection import (
+    add_collect_arguments,
+    add_scraper_commands,
+    handle_runner_command,
+    handle_scraper_command,
+)
+from .collectors import MAX_LIMIT
 from .evaluation import evaluate_tasks
 from .feed import import_feed, validate_feed
 from .feed_mapping import map_xml_feed
 from .image_fetch import fetch_images
 from .image_index import build_image_index, search_indexed_text
-from .pipeline import ingest_jsonl, ingest_records
+from .pipeline import ingest_jsonl
+from .practice.loader import MARKER_FILE as PRACTICE_MARKER
+from .practice.loader import build_practice_index, load_practice_catalogue
+from .product_text import build_product_text_index
 from .quality import quality_report
 from .ranking_evaluation import evaluate_rankings
 from .readiness import readiness_report, write_audit_sample
 from .removal import recheck_report
-from .schema import utc_now
 from .search import search_catalogue
 from .source_policy import load_policies
-from .sources import CRAWL_SOURCES, SOURCES
+from .sources import CRAWL_SOURCES, NON_RETAIL_SOURCES, SOURCES
 from .storage import export_catalogue, load_run, open_database
 
 
@@ -56,6 +64,7 @@ def make_parser() -> argparse.ArgumentParser:
         default=1500,
         help="Time to allow page scripts to render (0–10000; default: 1500)",
     )
+    add_collect_arguments(collect)
     ingest = commands.add_parser("ingest", help="Replay a raw JSONL snapshot")
     ingest.add_argument("source", choices=SOURCES)
     ingest.add_argument("path", type=Path)
@@ -72,6 +81,11 @@ def make_parser() -> argparse.ArgumentParser:
     mapping.add_argument("output_path", type=Path)
     mapping.add_argument(
         "--observed-at", help="ISO 8601 download time with timezone if XML has no timestamp"
+    )
+    mapping.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Write the valid rows and report the rejected ones instead of failing",
     )
     export = commands.add_parser("export", help="Export the stored catalogue")
     export.add_argument("path", type=Path)
@@ -173,6 +187,23 @@ def make_parser() -> argparse.ArgumentParser:
     for option in ("--category", "--colour", "--size", "--source"):
         look.add_argument(option)
     look.add_argument("--max-price", type=Decimal)
+    translation_default = os.environ.get("FASHION_FINDER_TRANSLATION_MODEL_DIR")
+    look.add_argument(
+        "--translate", choices=["none", "dictionary", "dictionary+mt", "mt"], default=None
+    )
+    look.add_argument(
+        "--translation-model-dir",
+        type=Path,
+        default=Path(translation_default) if translation_default else None,
+    )
+    product_text = commands.add_parser(
+        "index-product-text",
+        help="Embed short English descriptions of indexed offers for look search",
+    )
+    product_text.add_argument(
+        "--policy", type=Path, default=Path(policy_default) if policy_default else None
+    )
+    add_model_paths(product_text, text=True)
     images = commands.add_parser(
         "index-images", help="Build a local image-search experiment from permitted files"
     )
@@ -181,10 +212,21 @@ def make_parser() -> argparse.ArgumentParser:
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
     add_model_paths(images, text=False)
+    images.add_argument(
+        "--aspect",
+        choices=("squash", "pad", "center-crop"),
+        default="squash",
+        help="How photos become the model's square input (ONNX models only)",
+    )
+    images.add_argument(
+        "--flip-tta", action="store_true", help="Average each photo with its mirror image"
+    )
     fetch = commands.add_parser(
         "fetch-images", help="Download product photos of stored offers for index-images"
     )
-    fetch.add_argument("--source", choices=[key for key in SOURCES if key != "demo"])
+    fetch.add_argument(
+        "--source", choices=[key for key in SOURCES if key not in NON_RETAIL_SOURCES]
+    )
     fetch.add_argument(
         "--policy", type=Path, default=Path(policy_default) if policy_default else None
     )
@@ -196,6 +238,24 @@ def make_parser() -> argparse.ArgumentParser:
     fetch.add_argument(
         "--output-dir", type=Path, help="Photo and manifest folder (default: <data-dir>/images)"
     )
+    fetch.add_argument(
+        "--revalidate-days",
+        type=float,
+        help="Re-check photos fetched longer ago with ETag/Last-Modified (unchanged ones stay)",
+    )
+    add_scraper_commands(commands)
+    practice = commands.add_parser(
+        "load-practice-catalogue",
+        help="Load the public-dataset practice catalogue into its own data directory",
+    )
+    practice.add_argument("practice_dir", type=Path)
+    practice.add_argument("--limit", type=int, help="Products, balanced across categories")
+    practice.add_argument(
+        "--build-index",
+        action="store_true",
+        help="Also encode up to 2000 photos per run into the image index; rerun until complete",
+    )
+    add_model_paths(practice, text=False)
     metrics = commands.add_parser("analytics-report", help="Show anonymous daily event totals")
     metrics.add_argument("--days", type=int, default=7)
     metrics.add_argument("--output", type=Path, help="Create a JSON report file")
@@ -207,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "sources":
         for source in SOURCES.values():
-            print(f"{source.key}\tHU\t{source.category_url or 'feed-only'}")
+            start = source.category_url or (source.sitemaps[0] if source.sitemaps else "")
+            print(f"{source.key}\tHU\t{start or 'feed-only'}\t{source.status}")
         return 0
     if args.command == "validate-feed":
         try:
@@ -224,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.mapping_path,
                 args.output_path,
                 observed_at=args.observed_at,
+                allow_partial=args.allow_partial,
             )
         except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
@@ -236,39 +298,31 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--url can only be used with one source")
         if not 0 <= args.browser_wait_ms <= 10000:
             parser.error("--browser-wait-ms must be between 0 and 10000")
+    # Before any collection runs: real retailer data must never land in a practice data dir.
+    if (
+        args.command in {"collect", "refresh", "ingest", "import-feed", "fetch-images"}
+        and (args.data_dir / PRACTICE_MARKER).exists()
+    ):
+        parser.error("this data directory holds the practice catalogue; use another --data-dir")
+    runner_result = handle_runner_command(args, parser)  # API mode needs no local catalogue
+    if runner_result is not None:
+        return runner_result
+    if args.command == "load-practice-catalogue":
+        try:
+            result = load_practice_catalogue(args.data_dir, args.practice_dir, limit=args.limit)
+            if args.build_index:
+                result["index"] = build_practice_index(args.data_dir, model_path=args.model_path)
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     engine = open_database(args.data_dir / "fashion_finder.sqlite")
     if args.command == "migrate":
         print(f"Migrated {engine.path}")
         return 0
-    if args.command == "collect":
-        selected = (
-            list(CRAWL_SOURCES.values()) if args.source == "all" else [CRAWL_SOURCES[args.source]]
-        )
-        started_at = utc_now().isoformat()
-        state = crawl(
-            selected,
-            args.limit,
-            {args.source: args.url} if args.url else None,
-            browser=args.browser,
-            browser_wait_ms=args.browser_wait_ms,
-        )
-        reports = [
-            ingest_records(
-                engine,
-                args.data_dir,
-                source.key,
-                state.records.get(source.key, []),
-                state.errors.get(source.key, []),
-                started_at=started_at,
-                discovered=state.discovered.get(source.key, 0),
-            )
-            for source in selected
-        ]
-        export_catalogue(engine, args.data_dir / "exports" / "catalogue.jsonl")
-        export_catalogue(engine, args.data_dir / "exports" / "catalogue.csv")
-        for report in reports:
-            print(json.dumps(report, ensure_ascii=False))
-        return 0 if all(report["status"] == "success" for report in reports) else 1
+    scraper_result = handle_scraper_command(args, engine, parser)
+    if scraper_result is not None:
+        return scraper_result
     if args.command == "ingest":
         report = ingest_jsonl(engine, args.data_dir, args.path, args.source)
         print(json.dumps(report, ensure_ascii=False))
@@ -340,7 +394,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.policy is None:
                 raise ValueError("--policy is required to index images")
             result = build_image_index(
-                engine, load_policies(args.policy), args.manifest, model_path=args.model_path
+                engine,
+                load_policies(args.policy),
+                args.manifest,
+                model_path=args.model_path,
+                aspect=args.aspect,
+                flip_tta=args.flip_tta,
             )
         except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
@@ -362,6 +421,24 @@ def main(argv: list[str] | None = None) -> int:
                 model_path=args.model_path,
                 text_model_path=args.text_model_path,
                 tokenizer_path=args.tokenizer_path,
+                translate=args.translate
+                or ("dictionary+mt" if args.translation_model_dir else "dictionary"),
+                translation_model_dir=args.translation_model_dir,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "index-product-text":
+        try:
+            if args.policy is None:
+                raise ValueError("--policy is required to describe indexed offers")
+            result = build_product_text_index(
+                engine,
+                load_policies(args.policy),
+                model_path=args.model_path,
+                text_model_path=args.text_model_path,
+                tokenizer_path=args.tokenizer_path,
             )
         except (OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
@@ -379,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
                 per_offer=args.per_offer,
                 delay=args.delay,
+                revalidate_after_days=args.revalidate_days,
             )
         except (OSError, ValueError) as exc:
             parser.error(str(exc))

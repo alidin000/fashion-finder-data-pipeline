@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -74,10 +75,12 @@ def _read_feed(
                 "category": row.get("category") or None,
                 "description": row.get("description"),
                 "original_price": row.get("original_price"),
-                "images": [row["image_url"].strip()] if row.get("image_url") else [],
+                "images": ([row["image_url"].strip()] if row.get("image_url") else [])
+                + (row.get("additional_image_urls") or "").split(),
                 "colours": row.get("colour"),
-                "sizes": row.get("size"),
+                "sizes": [size for size in (row.get("size") or "").split("|") if size.strip()],
                 "availability": row.get("availability"),
+                "item_group_id": row.get("item_group_id") or None,
             }
             records.append(
                 (
@@ -97,6 +100,20 @@ def _read_feed(
                 )
             )
     return records, errors, discovered
+
+
+def row_problems(path: Path, source_key: str) -> set[int]:
+    """CSV line numbers that a timestamped feed import would reject."""
+    records, errors, _ = _read_feed(path, source_key, require_observed_at=True)
+    bad = {int(match[1]) for error in errors if (match := re.match(r"feed row (\d+):", error))}
+    for number, record in records:
+        try:
+            offer = normalize(record)
+            if offer.price_amount is None or offer.currency != "HUF":
+                raise ValueError("HUF price is required")
+        except (TypeError, ValueError):
+            bad.add(number)
+    return bad
 
 
 def validate_feed(path: Path, source_key: str) -> dict:
@@ -131,6 +148,8 @@ def import_feed(
     require_observed_at: bool = False,
 ) -> dict:
     """Import a local, authorized CSV; reject bad rows without losing good ones."""
+    from .scheduler import mark_observed
+
     numbered, errors, discovered = _read_feed(
         path, source_key, require_observed_at=require_observed_at
     )
@@ -142,4 +161,6 @@ def import_feed(
         errors,
         discovered=discovered,
         preparse_rejected=len(errors),
+        # A feed row is a check of that offer: schedule its next web refresh, if any.
+        on_offer=lambda record, offer, outcome: mark_observed(engine, record, offer),
     )

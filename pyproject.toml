@@ -44,7 +44,7 @@ fashion-finder-demo = "fashion_finder_data.demo:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fashion_finder_data = ["demo_assets/*.jpg"]
+fashion_finder_data = ["demo_assets/*.jpg", "source_definitions.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

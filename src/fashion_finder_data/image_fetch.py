@@ -3,7 +3,14 @@
 Files and a manifest land under one directory. The manifest is the input that
 ``index-images`` expects, so fetching and indexing are two separate steps. Only
 photos the index would accept are fetched, and every request respects robots.txt
-and the text-and-data-mining opt-outs of EU DSM Directive Article 4 (TDMRep).
+(including its Crawl-delay) and the text-and-data-mining opt-outs of EU DSM
+Directive Article 4 (TDMRep, the ``tdm-reservation`` header, ``noai`` robots tags).
+
+Throughput within politeness: each host keeps its own spacing, and downloads are
+interleaved across hosts so waits overlap; the best photos of each offer are
+chosen (packshots first, no size charts or logos); files already on disk are
+reused, optionally revalidated with ETag/Last-Modified, and identical bytes are
+stored once.
 """
 
 from __future__ import annotations
@@ -26,16 +33,18 @@ from PIL import Image, UnidentifiedImageError
 from protego import Protego
 
 from .image_index import MAX_ENTRIES, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, image_skip_reason
+from .image_selection import select_photos
 from .public_catalogue import _safe_image_url
 from .source_policy import SourcePolicy
-from .sources import SOURCES, USER_AGENT
+from .sources import ROBOTS_TOKEN, SOURCES, USER_AGENT
 from .storage import Database, offer_rows
 
 MANIFEST_FILE = "manifest.json"
 EXTENSIONS = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}
 
 Fetched = tuple[bytes, Mapping[str, str]]
-Fetch = Callable[[str], Fetched]
+Fetch = Callable[..., Fetched]
+CACHE_FILE = "image-cache.json"
 
 
 def _site(host: str | None) -> str:
@@ -55,8 +64,8 @@ class _SameSiteRedirects(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_SameSiteRedirects)
 
 
-def http_get(url: str) -> Fetched:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+def http_get(url: str, headers: Mapping[str, str] | None = None) -> Fetched:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     with _OPENER.open(request, timeout=20) as response:
         data = response.read(MAX_IMAGE_BYTES + 1)
         headers = {key.lower(): value for key, value in response.headers.items()}
@@ -66,19 +75,43 @@ def http_get(url: str) -> Fetched:
 
 
 class Throttle:
-    """Wait ``delay`` seconds before every request after the first."""
+    """Space requests per host by ``delay`` or the host's robots.txt Crawl-delay if longer.
 
-    def __init__(self, fetch: Fetch, delay: float, sleep: Callable[[float], None]):
+    The first request to a host goes at once; later ones wait only for that host,
+    so photos from several shops download in parallel time without any one shop
+    seeing more than one request per allowed interval.
+    """
+
+    def __init__(
+        self,
+        fetch: Fetch,
+        delay: float,
+        sleep: Callable[[float], None],
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self._fetch = fetch
         self._delay = delay
         self._sleep = sleep
+        self._clock = clock
+        self._last: dict[str, float] = {}
+        self.crawl_delays: dict[str, float] = {}
         self.requests = 0
 
-    def __call__(self, url: str) -> Fetched:
-        if self.requests:
-            self._sleep(self._delay)
+    def wait_for(self, url: str) -> float:
+        host = (urlsplit(url).hostname or "").lower()
+        last = self._last.get(host)
+        if last is None:
+            return 0.0
+        spacing = max(self._delay, self.crawl_delays.get(host, 0.0))
+        return max(0.0, last + spacing - self._clock())
+
+    def __call__(self, url: str, headers: Mapping[str, str] | None = None) -> Fetched:
+        wait = self.wait_for(url)
+        if wait > 0:
+            self._sleep(wait)
+        self._last[(urlsplit(url).hostname or "").lower()] = self._clock()
         self.requests += 1
-        return self._fetch(url)
+        return self._fetch(url, headers) if headers else self._fetch(url)
 
 
 def _origin(url: str) -> str:
@@ -89,8 +122,9 @@ def _origin(url: str) -> str:
 class RobotsRules:
     """One robots.txt per host, parsed with Protego as Scrapy does (RFC 9309)."""
 
-    def __init__(self, fetch: Fetch):
+    def __init__(self, fetch: Fetch, throttle: Throttle | None = None):
         self._fetch = fetch
+        self._throttle = throttle
         self._parsers: dict[str, Protego | bool] = {}
 
     def allowed(self, url: str) -> bool:
@@ -100,6 +134,10 @@ class RobotsRules:
             try:
                 body, _ = self._fetch(origin + "/robots.txt")
                 rules = Protego.parse(body.decode("utf-8", "replace"))
+                delay = rules.crawl_delay(ROBOTS_TOKEN)
+                if delay is not None and self._throttle is not None:
+                    host = (urlsplit(origin).hostname or "").lower()
+                    self._throttle.crawl_delays[host] = float(delay)
             except urllib.error.HTTPError as exc:
                 # 401/403 forbid everything; another 4xx means there are no rules.
                 rules = exc.code not in (401, 403) and 400 <= exc.code < 500
@@ -107,7 +145,7 @@ class RobotsRules:
                 rules = False  # unreadable rules: skip the host rather than guess
             self._parsers[origin] = rules
         rules = self._parsers[origin]
-        return rules if isinstance(rules, bool) else rules.can_fetch(url, USER_AGENT)
+        return rules if isinstance(rules, bool) else rules.can_fetch(url, ROBOTS_TOKEN)
 
 
 def _location_matches(pattern: str, path: str) -> bool:
@@ -132,7 +170,11 @@ class TdmRules:
                 parsed = json.loads(body)
                 rules = parsed if isinstance(parsed, list) else None  # malformed: unreadable
             except urllib.error.HTTPError as exc:
-                rules = [] if 400 <= exc.code < 500 else None
+                # No file means no reservation. Several LPP shops answer 301 without a
+                # Location (and a 404 body): a redirect that leads nowhere is "no file"
+                # too, not "unreadable" (docs/data-research/lpp-catalogue-capacity.md).
+                no_file = 400 <= exc.code < 500 and exc.code not in (401, 403, 429)
+                rules = [] if no_file or 300 <= exc.code < 400 else None
             except (OSError, ValueError):
                 rules = None
             self._rules[origin] = rules
@@ -192,6 +234,43 @@ def _kept_entries(
     return kept
 
 
+def _interleave(planned: list[tuple]) -> list[tuple]:
+    """Round-robin across image hosts so one host's spacing never idles the others."""
+    queues: dict[str, list[tuple]] = {}
+    for item in planned:
+        queues.setdefault((urlsplit(item[1]).hostname or "").lower(), []).append(item)
+    ordered: list[tuple] = []
+    while queues:
+        for host in list(queues):
+            ordered.append(queues[host].pop(0))
+            if not queues[host]:
+                del queues[host]
+    return ordered
+
+
+def _load_cache(root: Path) -> dict[str, dict[str, Any]]:
+    try:
+        raw = json.loads((root / CACHE_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _save_cache(root: Path, cache: dict[str, dict[str, Any]]) -> None:
+    temporary = root / f".{CACHE_FILE}.tmp"
+    temporary.write_text(json.dumps(cache, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(root / CACHE_FILE)
+
+
+def _opted_out(headers: Mapping[str, str]) -> str | None:
+    if headers.get("tdm-reservation", "").strip() == "1":
+        return "text-and-data-mining reserved (header)"
+    tags = {tag.strip().lower() for tag in headers.get("x-robots-tag", "").split(",")}
+    if tags & {"noai", "noimageai"}:
+        return "image opts out of AI use (X-Robots-Tag)"
+    return None
+
+
 def fetch_images(
     database: Database,
     output_dir: Path,
@@ -203,8 +282,14 @@ def fetch_images(
     delay: float = 2.0,
     fetch: Fetch = http_get,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    revalidate_after_days: float | None = None,
 ) -> dict[str, Any]:
-    """Download up to ``per_offer`` photos for each of ``limit`` eligible offers."""
+    """Download up to ``per_offer`` photos for each of ``limit`` eligible offers.
+
+    ``revalidate_after_days`` re-checks photos fetched longer ago with a
+    conditional request (ETag / Last-Modified); unchanged photos are not rewritten.
+    """
     if not 1 <= limit <= MAX_ENTRIES:
         raise ValueError(f"limit must be between 1 and {MAX_ENTRIES}")
     if not 1 <= per_offer <= 8:
@@ -213,6 +298,8 @@ def fetch_images(
         raise ValueError("delay must be between 0.5 and 60 seconds")
     if source is not None and source not in SOURCES:
         raise ValueError("unknown source")
+    if revalidate_after_days is not None and not 0 < revalidate_after_days <= 365:
+        raise ValueError("revalidate-after-days must be between 0 and 365")
     root = output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
     manifest_path = root / MANIFEST_FILE
@@ -227,10 +314,29 @@ def fetch_images(
         (entry["offer_id"], entry["image_url"]): entry
         for entry in _kept_entries(manifest_path, root, offers, policies, now)
     }
+    cache = _load_cache(root)
+    by_hash = {
+        item["sha256"]: item["path"]
+        for item in cache.values()
+        if isinstance(item, dict)
+        and item.get("sha256")
+        and (root / str(item.get("path"))).is_file()
+    }
+
+    def stale(url: str) -> bool:
+        fetched = (cache.get(url) or {}).get("fetched_at")
+        if revalidate_after_days is None:
+            return False
+        try:
+            age = now - datetime.fromisoformat(fetched)
+        except (TypeError, ValueError):
+            return True
+        return age.total_seconds() > revalidate_after_days * 86400
+
     counts: Counter[str] = Counter()
     failures: Counter[str] = Counter()
     skipped: Counter[str] = Counter()
-    planned: list[tuple[dict[str, Any], str]] = []
+    planned: list[tuple[dict[str, Any], str, bool]] = []
     selected = 0  # offers with at least one eligible photo
     for offer_id, offer in sorted(offers.items()):
         if source is not None and offer["source_key"] != source:
@@ -238,29 +344,31 @@ def fetch_images(
         if selected >= limit:
             break
         eligible = False
-        for url in json.loads(offer["image_urls"])[:per_offer]:
+        for url in select_photos(json.loads(offer["image_urls"]), per_offer):
             reason = image_skip_reason(offer, url, policies, now)
             if reason:
                 skipped[reason] += 1
                 continue
             eligible = True
-            if (offer_id, url) in entries:
+            if (offer_id, url) in entries and not stale(url):
                 counts["reused"] += 1
             elif not retailer_image_url(offer["source_key"], url):
                 failures["image URL is not on the retailer's HTTPS domains"] += 1
             else:
-                planned.append((offer, url))
+                planned.append((offer, url, (offer_id, url) in entries))
         selected += eligible
     if len(entries) + len(planned) > MAX_ENTRIES:
         raise ValueError(f"manifest would exceed {MAX_ENTRIES} images; use a smaller limit")
-    throttle = Throttle(fetch, delay, sleep)
-    robots = RobotsRules(throttle)
+    throttle = Throttle(fetch, delay, sleep, clock)
+    robots = RobotsRules(throttle, throttle)
     tdm = TdmRules(throttle)
-    for offer, url in planned:
+    for offer, url, revalidate in _interleave(planned):
         stem = f"{offer['id']}-{hashlib.sha256(url.encode()).hexdigest()[:16]}"
         folder = root / offer["source_key"]
         existing = next(folder.glob(stem + ".*"), None) if folder.is_dir() else None
-        if existing is None:
+        if existing is not None and not revalidate:
+            counts["reused"] += 1
+        else:
             # The shop's own site may reserve mining for everything it publishes.
             site = f"https://www.{SOURCES[offer['source_key']].host}/"
             if not robots.allowed(url):
@@ -273,26 +381,52 @@ def fetch_images(
             if None in reservations:
                 failures["unreadable TDMRep rules"] += 1
                 continue
+            known = cache.get(url) or {}
+            conditional = {}
+            if existing is not None and known.get("etag"):
+                conditional["If-None-Match"] = known["etag"]
+            if existing is not None and known.get("last_modified"):
+                conditional["If-Modified-Since"] = known["last_modified"]
             try:
-                data, headers = throttle(url)
-                if headers.get("tdm-reservation", "").strip() == "1":
-                    failures["text-and-data-mining reserved (header)"] += 1
+                data, headers = throttle(url, conditional or None)
+                opted_out = _opted_out(headers)
+                if opted_out:
+                    failures[opted_out] += 1
                     continue
                 extension = _image_extension(data)
             except urllib.error.HTTPError as exc:
-                failures[f"HTTP {exc.code}"] += 1
-                continue
+                if exc.code == 304 and existing is not None:
+                    counts["unchanged"] += 1
+                    cache[url] = {**known, "fetched_at": now.isoformat()}
+                else:
+                    failures[f"HTTP {exc.code}"] += 1
+                    continue
             except (OSError, ValueError) as exc:
                 failures[str(exc) or type(exc).__name__] += 1
                 continue
-            folder.mkdir(exist_ok=True)
-            existing = folder / f"{stem}.{extension}"
-            temporary = existing.with_name(f".{existing.name}.tmp")
-            temporary.write_bytes(data)
-            temporary.replace(existing)
-            counts["downloaded"] += 1
-        else:
-            counts["reused"] += 1
+            else:
+                digest = hashlib.sha256(data).hexdigest()
+                if existing is not None and known.get("sha256") == digest:
+                    counts["unchanged"] += 1
+                elif existing is None and digest in by_hash:
+                    existing = root / by_hash[digest]  # the same photo under another URL
+                    counts["deduplicated"] += 1
+                else:
+                    folder.mkdir(exist_ok=True)
+                    existing = folder / f"{stem}.{extension}"
+                    temporary = existing.with_name(f".{existing.name}.tmp")
+                    temporary.write_bytes(data)
+                    temporary.replace(existing)
+                    counts["downloaded"] += 1
+                path = existing.relative_to(root).as_posix()
+                by_hash.setdefault(digest, path)
+                cache[url] = {
+                    "etag": headers.get("etag"),
+                    "last_modified": headers.get("last-modified"),
+                    "sha256": digest,
+                    "path": path,
+                    "fetched_at": now.isoformat(),
+                }
         entries[(offer["id"], url)] = {
             "offer_id": offer["id"],
             "image_url": url,
@@ -302,13 +436,17 @@ def fetch_images(
     temporary = manifest_path.with_name(f".{MANIFEST_FILE}.tmp")
     temporary.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     temporary.replace(manifest_path)
+    _save_cache(root, cache)
     return {
         "status": "fetched" if not failures else "partial" if manifest else "failed",
         "offers_selected": selected,
         "downloaded": counts["downloaded"],
         "reused": counts["reused"],
+        "unchanged_on_revalidation": counts["unchanged"],
+        "deduplicated": counts["deduplicated"],
         "skipped_not_eligible": dict(skipped),
         "requests": throttle.requests,
+        "crawl_delays": throttle.crawl_delays,
         "failures": dict(failures),
         "manifest_path": str(manifest_path),
         "manifest_entries": len(manifest),

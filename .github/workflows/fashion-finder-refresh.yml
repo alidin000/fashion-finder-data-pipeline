@@ -1,0 +1,96 @@
+name: Fashion Finder product refresh
+
+# Refreshes due offers through the authenticated ingest API every 12 hours.
+# The runner keeps nothing: results go straight to the Django database.
+# The same command runs unchanged as a Render cron job or on a self-hosted runner;
+# see docs/scraper.md ("Scheduled refresh") before enabling this on a fork.
+
+on:
+  schedule:
+    - cron: "17 8,20 * * *"
+      timezone: "Europe/Budapest"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "refresh (due offers) or discover (find new offers)"
+        type: choice
+        options: [refresh, discover]
+        default: refresh
+      limit:
+        description: "Offers to check this run (refresh) or per source (discover)"
+        required: false
+        default: "500"
+      source:
+        description: "One source key, e.g. reserved (empty: every reviewed source)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fashion-finder-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      FASHION_FINDER_API_URL: ${{ secrets.FASHION_FINDER_API_URL }}
+      FASHION_FINDER_API_TOKEN: ${{ secrets.FASHION_FINDER_API_TOKEN }}
+      FASHION_FINDER_CONTACT_URL: ${{ vars.FASHION_FINDER_CONTACT_URL }}
+      COMMAND: ${{ inputs.command || 'refresh' }}
+      LIMIT: ${{ inputs.limit || '500' }}
+      SOURCE: ${{ inputs.source || '' }}
+    steps:
+      - name: Check configuration
+        id: config
+        run: |
+          if [ -z "$FASHION_FINDER_API_URL" ] || [ -z "$FASHION_FINDER_API_TOKEN" ]; then
+            echo "::notice title=Refresh skipped::Set the FASHION_FINDER_API_URL and FASHION_FINDER_API_TOKEN secrets to enable the scheduled refresh (docs/scraper.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+          case "$COMMAND" in refresh|discover) ;; *) echo "::error::unknown command"; exit 1 ;; esac
+          case "$LIMIT" in ''|*[!0-9]*) echo "::error::limit must be a number"; exit 1 ;; esac
+          case "$SOURCE" in ''|[a-z]*) ;; *) echo "::error::invalid source"; exit 1 ;; esac
+          case "$SOURCE" in *[!a-z0-9_]*) echo "::error::invalid source"; exit 1 ;; esac
+      - uses: actions/checkout@v7
+        if: steps.config.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        if: steps.config.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the scraper
+        if: steps.config.outputs.ready == 'true'
+        run: python -m pip install -e .
+      - name: Check whether a selected source needs a browser
+        id: browser
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          from fashion_finder_data.sources import CRAWL_SOURCES, DEFAULT_COLLECT_SOURCES
+          selected = [CRAWL_SOURCES[os.environ["SOURCE"]]] if os.environ["SOURCE"] else DEFAULT_COLLECT_SOURCES.values()
+          print("needed=" + str(any(source.rendering == "browser" for source in selected)).lower())
+          PY
+      - name: Install Chromium (only for sources marked rendering = "browser")
+        if: steps.config.outputs.ready == 'true' && steps.browser.outputs.needed == 'true'
+        run: python -m playwright install --with-deps chromium
+      - name: Run
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          if [ "$COMMAND" = "refresh" ]; then
+            set -- refresh --limit "$LIMIT" --time-budget-minutes 100
+            [ -n "$SOURCE" ] && set -- "$@" --source "$SOURCE"
+          else
+            set -- collect "${SOURCE:-all}" --limit "$LIMIT" --time-budget-minutes 100
+          fi
+          # API mode: due offers come from the API and results go back to it in batches.
+          fashion-finder "$@"

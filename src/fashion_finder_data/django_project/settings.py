@@ -35,6 +35,9 @@ MIDDLEWARE = [
 ]
 if os.environ.get("FASHION_FINDER_SERVE_STATIC") == "1":
     MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
+if os.environ.get("FASHION_FINDER_PRACTICE_MODE") == "1":
+    # Local practice catalogue only: serves GLAMI photos that have no public URL.
+    MIDDLEWARE.append("fashion_finder_data.practice.web.PracticeImageMiddleware")
 ROOT_URLCONF = "fashion_finder_data.django_project.urls"
 TEMPLATES = [
     {

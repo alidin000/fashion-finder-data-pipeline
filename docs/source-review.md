@@ -56,3 +56,15 @@ All three licences permit use and modification subject to their conditions and n
 4. Keep source-code licences separate from retailer content rights and site-access terms.
 5. An extractor's ability to obtain a field does not establish permission to store, display, republish or process it.
 6. This is an engineering inventory, not legal advice. It reviews code licensing, not permission to collect or republish retailer data.
+
+## Addendum 2026-10-24: collector framework notes
+
+- No new runtime dependency was added. The collector still uses Scrapy (BSD-3-Clause),
+  Protego (BSD-3-Clause) and lxml through Scrapy; the optional `crawlee-benchmark` extra is
+  unchanged. `actionlint` was used locally to lint the workflow and is not a dependency.
+- Scrapy 2.19's stock `RobotsTxtMiddleware` shares one Twisted `Deferred` between all
+  requests waiting for a host's robots.txt. Under the asyncio reactor each waiter calls
+  `Deferred.asFuture`, which passes the result to the first waiter only and `None` to the
+  others, and `None` means "no rules". `politeness.PoliteRobotsMiddleware` replaces the
+  waiting with an asyncio future so every request is checked; see [the scraper
+  guide](scraper.md#compliance-model). Worth reporting upstream after a minimal reproduction.

@@ -233,7 +233,7 @@ fashion-finder report <run-id>
 fashion-finder export data/exports/catalogue.csv
 ```
 
-`collect all` reports each retailer independently and exits nonzero when any source fails. Use `--url https://...` with a single source to test a specific Hungarian category or product URL. Only HTTPS pages on that retailer's Hungarian storefront are accepted. The CLI never logs in, solves CAPTCHAs, or works around HTTP 403.
+`collect all` runs only the sources marked `reviewed` in `source_definitions.toml` (today the five LPP shops); every other source needs an explicit name. It reports each retailer independently and exits nonzero when any source fails. Use `--url https://...` with a single source to test a specific Hungarian category or product URL. Only HTTPS pages on that retailer's Hungarian storefront are accepted. The CLI never logs in, solves CAPTCHAs, or works around HTTP 403. Requests identify themselves as `FashionFinderBot` with a contact URL (`--contact-url` or `FASHION_FINDER_CONTACT_URL`). Discovery (`collect`) and refresh of known offers (`refresh`) are separate commands; see [the scraper guide](docs/scraper.md).
 
 `--browser` renders both category and product pages in Chromium before the existing
 parsers run. Scrapy checks `robots.txt` before each top-level navigation. Its
@@ -334,7 +334,7 @@ also require `observed_at` with a timezone. The dry-run validator writes no
 database or raw archive. No partner feed for the candidate sources has been
 provided or verified; see the [onboarding steps](docs/hungarian-source-candidates.md).
 
-LPP sources page through a category until `--limit` is met. Other sources sample the first category page only. Neither covers a full catalogue unless you pass its categories with `--url`. The limit is 1–1000 product offers per source across all starting URLs, with a 10-second per-domain delay. A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
+LPP sources page through a category until `--limit` is met. Other sources sample the first category page only. Neither covers a full catalogue unless you pass its categories with `--url`. The limit is 1–60,000 product offers per source across all starting URLs; `--max-requests` and `--time-budget-minutes` bound the actual work, and each host keeps at least a 10-second delay (longer when its robots.txt asks for it). A JSONL export contains product and image URLs, but this does not grant rights to republish retailer content or images.
 
 ## First success criteria
 

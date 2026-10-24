@@ -1,0 +1,23 @@
+{
+ "https://www.reserved.com/robots.txt": {
+  "status": 200,
+  "headers": {
+   "Content-Type": "text/plain"
+  },
+  "body": "robots.txt"
+ },
+ "https://www.reserved.com/hu/hu/noi/ruhazat/kabatok": {
+  "status": 200,
+  "headers": {
+   "Content-Type": "text/html; charset=utf-8"
+  },
+  "body": "listing-page1.html"
+ },
+ "https://www.reserved.com/hu/hu/ballon-kabat-303cc-01x": {
+  "status": 404,
+  "headers": {
+   "Content-Type": "text/html"
+  },
+  "text": "<html><body>Az oldal nem található</body></html>"
+ }
+}

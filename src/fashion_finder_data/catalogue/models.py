@@ -43,6 +43,15 @@ class RetailerOffer(models.Model):
     updated_at = models.CharField(max_length=255)
     last_seen_at = models.CharField(max_length=255)
     status = models.CharField(max_length=255, default="active")
+    # Refresh scheduling (migration 0004). Discovery finds offers; refresh re-checks
+    # them from `refresh_url` (or `source_url`) when `next_refresh_at` is due.
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    next_refresh_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_error = models.CharField(max_length=255, null=True, blank=True)
+    failure_count = models.PositiveIntegerField(default=0)
+    gone_checks = models.PositiveIntegerField(default=0)
+    missing_since = models.DateTimeField(null=True, blank=True)
+    refresh_url = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "retailer_offer"
@@ -59,6 +68,7 @@ class RetailerOffer(models.Model):
                 fields=["retailer", "status", "currency", "category"],
                 name="offer_public_filter_idx",
             ),
+            models.Index(fields=["retailer", "next_refresh_at"], name="offer_refresh_due_idx"),
         )
 
     def __str__(self):

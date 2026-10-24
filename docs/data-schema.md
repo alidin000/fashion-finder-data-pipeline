@@ -32,6 +32,16 @@ One record per retailer listing/offer. Do not assume two visually similar record
 - created_at, updated_at, last_seen_at
 - status — active, needs_recheck, unavailable
 
+Refresh schedule (migration 0004; see [the scraper guide](scraper.md)):
+- last_checked_at — when the offer was last checked, even if nothing changed
+- next_refresh_at — when it is next due (indexed, also with the retailer)
+- refresh_url — the page a refresh reads, when it differs from source_url
+- last_error — reason for the latest failed check
+- failure_count — consecutive failures; drives exponential backoff (30 min doubling, 24 h cap)
+- gone_checks — consecutive 404/410 or discontinued answers; two, at least 6 hours apart,
+  make the offer unavailable
+- missing_since — first time a complete category listing no longer showed the offer
+
 ## PriceObservation
 - id
 - offer_id

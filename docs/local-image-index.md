@@ -94,9 +94,16 @@ curl -fsS -F file=@data/images/offer-123.jpg \
 ```
 
 `category`, `colour`, `size`, `max_price`, and `source` are optional multipart
-fields. Results are capped at five and labeled **Style inspiration**. The
-uploaded photo is decoded in memory and not stored by this route. The API
-does not fetch retailer images during a shopper request.
+fields. Two more are optional:
+- `crop=manual` says the photo is already the shopper's crop, so the server
+  does not crop it again (see [Photo understanding](#photo-understanding)).
+- `limit` (1–20) asks for more results. Without it the route returns five,
+  the number the release gate measures.
+
+The shopper page asks for 20 and shows five until the shopper presses **Show
+more**, so the extra results need no second model run. Results are labeled
+**Style inspiration**. The uploaded photo is decoded in memory and not stored
+by this route. The API does not fetch retailer images during a shopper request.
 
 Rebuild the index after feed image URLs or permissions change. At request time,
 the API still checks current offer freshness, source policy, policy version,
@@ -134,6 +141,28 @@ each photo to 224×224 (bicubic) and scales pixels to [-1, 1], which is the
 preprocessing Marqo publishes for this model, then L2-normalises `image_embeds`.
 Point the API at the same file with `FASHION_FINDER_IMAGE_MODEL_PATH`, as in the
 Docker settings below.
+
+`index-images` takes two optional preprocessing flags for ONNX models:
+- `--aspect pad` letterboxes each photo with its own border colour, and
+  `--aspect center-crop` keeps the middle square. The default stays `squash`.
+- `--flip-tta` averages each photo's embedding with its mirror image's.
+
+Both are added to the index's `feature_version` (for example
+`…:f1009cfc…+aspect-pad+flip-tta`), and photo search embeds queries the way the
+index was built. An index built without flags keeps its old version and needs no
+rebuild. Look search only needs the same model, so it accepts any of these
+indexes. Measured with INT8 on 2,216 practice photos (1,656 ABO same-product
+queries, 560 GLAMI category queries):
+
+| Index | Same product Hit@1 | Hit@5 | Category P@5 |
+|---|---|---|---|
+| squash (default) | 0.475 | 0.725 | 0.745 |
+| pad | 0.465 | 0.714 | 0.752 |
+| center-crop | 0.423 | 0.677 | 0.725 |
+| squash + flip TTA | 0.486 | 0.725 | 0.755 |
+
+Flip TTA gains about one point, costs twice the indexing time and one more model
+run per photo search, so it stays opt-in. Centre-cropping cuts off sleeves and hems.
 
 ## Text-to-photo search ("match by look")
 
@@ -177,25 +206,335 @@ same filters as `/api/v1/search`, plus `limit` (1–50, default 20). Text search
 refuses an index built with another model, because the two embeddings would not be
 comparable.
 
-Two steps make look search work for Hungarian shoppers and titles:
-- Known Hungarian clothing and colour words are translated before embedding, so
-  `fekete kabát` reaches the model as `black coat`. Other words pass through.
-- The visual order is blended with word relevance by reciprocal rank fusion
-  (k = 60). An offer whose title or category names the item ranks above one that
-  only looks similar.
+### How a look query is read
 
-## Cropping and the category vote
+The model only reads English, and most shoppers type Hungarian. Each query is read
+first (`look_query.understand`, dictionary in `hungarian.py`):
 
-On the shopper page, drag across the garment in the photo preview. The browser
-crops the photo before upload, so a person or background no longer dominates the
-match. **Clear crop** sends the whole photo again.
+- **Hungarian words are translated** by a fashion dictionary of about 480 words:
+  garments, colours, fabrics, patterns, fits, lengths, sleeves, necklines,
+  occasions and who it is for (`női`, `férfi`, `gyerek`). Accents are optional.
+  Case and plural endings are stripped (`kabátokat` → coat), compounds are split
+  (`bőrkabát` → leather coat), and two-word phrases are kept together
+  (`hosszú ujjú` → long sleeve, `fekete-fehér` → black and white).
+- **Unknown words are kept as typed**, so brands (`Tamaris`) still reach the model.
+  Unknown words with Hungarian letters are listed in `interpretation.untranslated`.
+- **Price and size phrases become limits**, not words for the model:
+  `10000 Ft alatt`, `20 000 Ft-ig`, `10e Ft alatt`, `5000 és 10000 Ft között`,
+  `15000 felett`, `under 15000 Ft`, `38-as`, `M-es`. A `max_price` filter that the
+  caller sends wins over a typed one.
+- **Colour, category and gender become soft hints.** An offer that matches them
+  moves up the visual order; nothing is filtered out.
+- The English text is wrapped as `a photo of {q}` before embedding (measured best;
+  see below).
+
+`piros nyári ruha 10000 Ft alatt` is embedded as `a photo of red summer dress`,
+limited to 10,000 Ft, and hinted towards red dresses. The response says so:
+
+```json
+{
+  "items": [...],
+  "interpreted_query": "red summer dress",
+  "interpretation": {
+    "language": "hu", "translated_by": "dictionary",
+    "colour": "red", "category": "dresses", "gender": null, "size": null,
+    "max_price": "10000", "min_price": null, "untranslated": []
+  }
+}
+```
+
+Then the visual order is fused with word relevance by reciprocal rank fusion
+(k = 60). Word relevance lists only the offers whose title, category and colours
+contain the most query words (usually all of them), so a title that names the item
+ranks above one that only looks similar, and a red dress does not compete with a
+red Manzara parka for `manzara piros`.
+
+### Look options
+
+`search_indexed_text` takes these keyword arguments, each with a safe default, so
+the benchmark can compare them (`--look-options '{json}'`):
+
+| Option | Default | Values |
+|---|---|---|
+| `translate` | `"dictionary"` | `"none"`, `"dictionary"`, `"dictionary+mt"`, `"mt"` |
+| `translation_model_dir` | None | folder with the pinned opus-mt files (below) |
+| `price_hints` | True | read price and size phrases from the text |
+| `prompt_template` | `"a photo of {q}"` | None, one template, or a list (averaged) |
+| `product_text_weight` | None | 0–1; None uses the default when a sidecar exists |
+| `hints` | `"boost"` | `"boost"`, `"filter"`, `"off"` |
+| `hint_weight` | 0.5 | visual-score bonus, in standard deviations, for meeting every hint |
+| `fusion` | `"rrf"` | `"rrf"`, `"weighted"` |
+| `rrf_k`, `lexical_weight` | 60, 1.0 | fusion constants |
+| `blend` | True | False ranks by look alone |
+
+### Product text sidecar
+
+`index-product-text` describes every indexed offer in a few English words from its
+structured fields (`women's black quilted hooded coat cotton`), embeds the
+descriptions with the text model, and writes `product-text-index.json` next to the
+photo index. It never changes the photo index. Rebuild it after `index-images`:
+
+```bash
+.venv/bin/fashion-finder --data-dir data index-product-text \
+  --policy data/source-policies.json \
+  --model-path data/models/fashion-siglip-vision.onnx \
+  --text-model-path data/models/fashion-siglip-text.onnx \
+  --tokenizer-path data/models/fashion-siglip-tokenizer.json
+```
+
+The sidecar records its format, description, text-model and photo-index versions.
+A sidecar from another model or photo index is refused: an explicit
+`product_text_weight` raises an error, and the default quietly ranks without it.
+An offer whose title, category or colours changed since the build loses its stale
+description. With `product_text_weight = w`, the visual score is
+`(1 − w) · photo + w · text`, each standardised over the eligible offers.
+
+### Optional offline translation
+
+The dictionary path needs no model. For words it misses, look search can call the
+Apache-2.0 [`Helsinki-NLP/opus-mt-hu-en`](https://huggingface.co/Helsinki-NLP/opus-mt-hu-en)
+model, as the INT8 ONNX export in
+[`Xenova/opus-mt-hu-en`](https://huggingface.co/Xenova/opus-mt-hu-en) at revision
+`c9e8a7617fb4cb4fca3785c5bb22cfe457cde00b`. It runs locally with greedy decoding.
+Only unknown words with Hungarian letters reach it: dictionary words never do, and
+neither do plain-ASCII words, which are usually brands the model would rewrite.
+Numbers and brackets it invents are dropped.
+
+| File | Size | SHA-256 |
+|---|---|---|
+| `onnx/encoder_model_quantized.onnx` | 51.6 MB | `f0dce998a12ce35d4880d5f6ac153807be88bb50691244e512e9605b2cabd6fe` |
+| `onnx/decoder_model_quantized.onnx` | 58.6 MB | `bec30ea95c7331e4fb33ee61a9812d2a4a234fbcd116a21a86b114aa8b7fb2c5` |
+| `tokenizer.json` | 6.1 MB | `05467c7d69c3755d66e02b34d58d9643d0b2e7c28d3e761ba6036d7c855326c5` |
+
+```bash
+REV=c9e8a7617fb4cb4fca3785c5bb22cfe457cde00b
+mkdir -p data/models/opus-mt-hu-en
+for f in onnx/encoder_model_quantized.onnx onnx/decoder_model_quantized.onnx tokenizer.json; do
+  curl -fL -o "data/models/opus-mt-hu-en/$(basename $f)" \
+    "https://huggingface.co/Xenova/opus-mt-hu-en/resolve/$REV/$f"
+done
+sha256sum data/models/opus-mt-hu-en/*
+```
+
+Set `FASHION_FINDER_TRANSLATION_MODEL_DIR=/data/models/opus-mt-hu-en` for the API,
+or pass `--translation-model-dir` to `search-look`. A missing or unpinned folder
+leaves the API on the dictionary.
+
+`interpretation.translated_by` says what actually translated the query: `none`
+(nothing needed it), `dictionary`, `dictionary+mt` or `mt`.
+
+### Measured on the practice catalogue
+
+Private measurement, 2026-10-24, INT8 FashionSigLIP vision and text models, on
+agent 1's practice catalogue (3,597 ABO and GLAMI-1M `hu` offers, 4,747 photos)
+loaded with `source_key="reserved"` into a scratch database. Two labelled query
+sets, kept with the scratch data, not in the repository:
+
+- **Main set**, 100 queries (52 Hungarian, 48 English): category, colour and
+  category, material or pattern, price and product-level queries. Category and
+  colour labels come from the catalogue's category, gender and colour fields;
+  material and pattern labels from the offer's own text.
+- **Title set**, 40 Hungarian queries made from random GLAMI titles (codes and
+  capitalised brands removed); the one relevant item is that product. The
+  dictionary was not extended for these words.
+
+Hit@5 / MRR@10 / nDCG@10:
+
+| Variant | Main, Hungarian | Main, English | Title set |
+|---|---|---|---|
+| Before (30-word dictionary, all-words RRF) | 0.865 / 0.800 / 0.700 | 0.958 / 0.917 / 0.865 | 1.000 / 0.958 / 0.969 |
+| **Now (defaults)** | **1.000 / 0.978 / 0.942** | **1.000 / 0.974 / 0.935** | **1.000 / 0.971 / 0.978** |
+| no translation | 0.923 / 0.902 / 0.858 | 1.000 / 0.974 / 0.935 | 1.000 / 0.926 / 0.944 |
+| dictionary + translation model | 1.000 / 0.978 / 0.942 | 1.000 / 0.974 / 0.935 | 1.000 / 0.938 / 0.954 |
+| translation model for the whole query | 1.000 / 0.955 / 0.914 | 1.000 / 0.974 / 0.904 | 1.000 / 0.971 / 0.978 |
+| no prompt template | 1.000 / 0.968 / 0.940 | 1.000 / 0.974 / 0.937 | 1.000 / 0.971 / 0.978 |
+| no product text | 1.000 / 0.957 / 0.922 | 1.000 / 0.974 / 0.946 | 1.000 / 0.945 / 0.958 |
+| hints off | 1.000 / 0.968 / 0.927 | 1.000 / 0.964 / 0.914 | 1.000 / 0.971 / 0.978 |
+| hints as filters | 0.962 / 0.929 / 0.901 | 0.979 / 0.953 / 0.934 | 0.775 / 0.733 / 0.744 |
+| weighted fusion (lexical 3) | 1.000 / 0.978 / 0.942 | 1.000 / 0.974 / 0.935 | 1.000 / 0.971 / 0.978 |
+
+By look alone (`blend=False`), where translation and product text matter most:
+
+| Variant | Main, Hungarian | Main, English | Title set |
+|---|---|---|---|
+| before (30-word dictionary) | 0.558 / 0.467 / 0.424 | 0.917 / 0.785 / 0.727 | 0.375 / 0.268 / 0.327 |
+| no translation | 0.269 / 0.188 / 0.152 | 0.917 / 0.845 / 0.770 | 0.175 / 0.141 / 0.156 |
+| dictionary | 0.827 / 0.752 / 0.685 | 0.917 / 0.845 / 0.770 | 0.550 / 0.429 / 0.469 |
+| dictionary + translation model | 0.827 / 0.752 / 0.685 | 0.917 / 0.845 / 0.770 | 0.575 / 0.484 / 0.528 |
+| dictionary + product text (0.5) | 0.942 / 0.868 / 0.818 | 0.979 / 0.950 / 0.881 | 0.825 / 0.700 / 0.743 |
+
+What decided the defaults:
+- **Dictionary on by default; translation model opt-in.** The model helps by look
+  alone on unseen words (title set MRR 0.429 → 0.484) but lowers the fused title
+  set (0.971 → 0.938), rewrites brands, and adds up to 258 ms. Whole-query
+  translation hurt English queries and costs 127 ms at the median.
+- **`a photo of {q}`**: +0.045 MRR by look alone on the main set; neutral fused.
+  `a product photo of {q}` and averaging three templates were not better.
+- **Product text weight 0.5**: the best balance of both sets (0.7 was best by
+  look alone, but lost Hit@5 on English queries).
+- **Hint weight 0.5** as a visual-score bonus; as filters, hints cost 0.24 MRR on
+  the title set.
+- **RRF k = 60, lexical weight 1**: the best RRF settings (k 10–60, lexical
+  weight 1–2) and the best weighted fusion (lexical weight 3) were within 0.01 MRR
+  of each other, so RRF stays; lower lexical weights were worse.
+
+[SigLIP 2](https://huggingface.co/google/siglip2-base-patch16-224) (Apache-2.0,
+multilingual; INT8 ONNX from `onnx-community/siglip2-base-patch16-224-ONNX`) was
+measured by look alone with its own photo index. It reads some Hungarian (main
+Hungarian MRR 0.381 untranslated, against 0.188 for FashionSigLIP), but with the
+dictionary FashionSigLIP is better (0.752 against 0.715; English 0.845 against
+0.782; title set 0.429 against 0.326), and its text model is 2.5 times larger.
+It was not added.
+
+Latency, 100 main-set queries, measured while other model jobs kept the 6-CPU
+machine at a load average of about 9–10: median 378 ms, p95 438 ms. Of a median
+query, `_eligible` (the per-offer policy check shared with photo search) took
+about 240 ms, ranking 50 ms, the text embedding 25 ms and reading the query under
+0.1 ms. With the translation model on, 11 of 140 queries used it: reading took
+p95 60 ms and at most 258 ms. Whole-query translation took a median 127 ms and
+p95 412 ms. The model loads in about 0.7 s and needs about 0.5 GB more memory.
+
+## Photo understanding
+
+With Marqo-FashionSigLIP **and** its text model configured
+(`FASHION_FINDER_TEXT_MODEL_PATH`, `FASHION_FINDER_TOKENIZER_PATH`), photo search
+reads the photo before ranking (`src/fashion_finder_data/query_understanding.py`).
+With the colour-layout descriptor, the ViT, or no text model, none of this runs:
+the whole photo is embedded as before and `query` reports nothing.
+
+**Garment focus (`auto_crop`).** A shopper's photo often shows a person, a street
+or a whole outfit, while catalogue photos show one product. The search embeds the
+whole photo first. A photo already very close to an indexed photo (cosine ≥ 0.85)
+is a product photo and is searched whole: one model run. Otherwise seven regions
+follow in one batched run: halves, the centre, and bands for torso, legs and feet
+(or columns for a wide photo). The photo's main category is read with prompts such
+as "a photo of a jacket". The search then uses the region that looks most like that
+category and least like "a photo of a person". A region must beat the whole photo
+by a margin, so product photos stay whole.
+
+**Other garments (`query.alternatives`).** Regions that clearly read as another
+category, and overlap the searched area little, are offered as alternatives. The
+page shows them as "Also in this photo: Jeans". Choosing one re-runs the search on
+that region, sent as `crop=manual`.
+
+**Category and colour (`zero_shot`).** The searched region is classified against
+the 14 categories and, for that category, the repository's 15 colour words.
+`query.category` appears from probability 0.6 and `query.colour` from 0.7. The
+category is blended into the neighbours' vote (below). Offers whose
+`colour_names` match a confidently seen colour move up by 0.02 cosine distance,
+unless the shopper set a colour filter.
+
+The response adds, next to `items` and `preferred_category`:
+
+```json
+"query": {
+  "crop_source": "auto",
+  "crop": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 0.5},
+  "category": {"value": "jackets", "confidence": 0.94},
+  "colour": {"value": "brown", "confidence": 1.0},
+  "alternatives": [{"category": "jeans", "crop": {"x": 0.0, "y": 0.5, "width": 1.0, "height": 0.5}}]
+}
+```
+
+`crop` is a fraction of the uploaded photo and is null when the whole photo was
+searched. `crop_source` is `auto`, `manual` (the shopper cropped) or `none`.
+
+On the shopper page, the automatic box is drawn on the preview. Chips such as
+"Jacket · brown" show what was searched, marked "?" when the reading is weak.
+**Use whole photo** turns the focus off for that search. The shopper can still
+drag a crop, use the presets or the arrow keys; **Clear crop** sends the whole
+photo again.
+
+## The category vote
 
 When the shopper picks no category, the 20 closest offers vote on one, with weights
-1, 1/2, 1/3, and so on, so the nearest matches count most. If one category holds a
+1, 1/2, 1/3, and so on, so the nearest matches count most. With zero-shot on, the
+vote is blended with the photo's own category probabilities first. Their share
+rises from 0.25 to 0.75 as the nearest offer's similarity falls from 0.80 to 0.70:
+product photos sit close to catalogue photos and their neighbours vote well,
+while a street photo is far from all of them. If one category then holds a
 majority, the single nearest match stays first and the majority category follows
 in visual order; the response includes `preferred_category`. A red-dress photo then
 lists dresses before a red bag. Without a clear majority, the order stays purely
 visual. Look search does not use the vote.
+
+## Colour variants (`diversify`)
+
+Colour variants and duplicate listings of one product are folded into its nearest
+offer, which gains `variant_count` (how many were folded) and `variant_colours`
+(their other colour names). The page shows a "+2 colours" badge. Offers merge when
+they share a product-group id (a field offers do not carry yet). Otherwise they must
+come from the same shop at the same price, have the same title once colour words
+are dropped, and have best photos with cosine similarity ≥ 0.80. Photo similarity
+alone never merges: shops reuse one outfit photo on several product pages. A
+cheaper colour, or the same item at another shop, stays a separate result. On the
+practice catalogue's ABO colour-variant groups, the rule was 97 % precise and found
+25 % of variant pairs (45 % at similarity ≥ 0.70, still 97 % precise).
+
+## Photo search options
+
+`search_indexed_image` takes each behaviour as a keyword argument, so a benchmark
+can switch them: `auto_crop=True`, `zero_shot=True`, `diversify=True`,
+`consensus=True`, `manual_crop=False`, `limit=5`, `aspect=None` and
+`flip_tta=None`. For `aspect` and `flip_tta`, None follows how the index was built;
+a different value raises an error rather than mixing embeddings.
+`text_model_path` and `tokenizer_path` enable understanding.
+
+Measured with INT8 models on the practice catalogue (4,653 photos) and on 325
+licence-safe Fashionpedia street photos (CC BY, CC BY-SA, Unsplash, Pexels and
+freestocks images; private measurement only), offline with cached embeddings:
+
+| Query set | Measure | Before | After |
+|---|---|---|---|
+| ABO product photos (200) | same product Hit@5 | 0.66 | 0.66 (auto-crop) |
+| GLAMI product photos (150) | exact photo Hit@5 | 1.00 | 1.00 (auto-crop) |
+| ABO product pasted in a street photo (200) | same product Hit@5 | 0.29 | 0.34 (auto-crop) |
+| GLAMI garment pasted in a street photo (150) | exact photo Hit@5 | 0.50 | 0.69 (auto-crop) |
+| Street photos (324) | top 5 in the main garment's category | 0.554 | 0.591 (zero-shot) |
+| GLAMI leave-one-out (2,997) | category P@5 | 0.864 | 0.869 (zero-shot) |
+| GLAMI with a labelled colour (1,767) | top 5 in the photo's colour | 0.289 | 0.353 (colour boost; category P@5 0.867 → 0.862) |
+
+Through the real `search_indexed_image` with 40 held-out queries per set, defaults
+against every option off gave: pasted ABO products Hit@1 0.23 → 0.38 and Hit@5
+0.38 → 0.45; pasted GLAMI garments Hit@5 0.50 → 0.68; product photos unchanged
+within noise.
+
+Known limits:
+- On real street photos, 75 % get an automatic crop. Of those crops, 69 % keep the
+  main garment whole, and the garment fills 17 points more of the frame. The rest
+  cut it: the regions are fixed bands, not a garment detector. **Use whole photo**
+  and a manual crop recover.
+- Alternatives are right 78 % of the time on street photos. They appear on 35 % of
+  street photos and, falsely, on 12 % of single-product photos.
+- Same-product matching for a person wearing the item was not measured: no
+  licence-safe set pairs worn photos with catalogue photos.
+
+## Speed
+
+Each photo search runs the vision model once, or eight times when it tries
+regions. On this 6-core WSL machine, one INT8 run takes about 120 ms when idle.
+Other jobs shared the CPU during every measurement. Measured on 60 photos (30
+street, 30 product) against the 4,653-photo practice index:
+
+| Setting | Load average | p50 | p95 |
+|---|---|---|---|
+| everything off | 11.5 | 553 ms | 649 ms |
+| defaults (auto-crop on) | 10.9 | 2.4 s | 4.6 s |
+| defaults, `FASHION_FINDER_ONNX_THREADS=2` | 12.5 | 1.8 s | 4.1 s |
+| everything off | 6.3 | 309 ms | 391 ms |
+| defaults (auto-crop on) | 7.5 | 1.4 s | 2.7 s |
+| defaults, `FASHION_FINDER_ONNX_THREADS=2` | 6.2 | 1.7 s | 3.1 s |
+
+Product photos take the one-run path. The slow tail is street photos, which try
+all eight regions. At 120 ms per run an idle machine needs about one second for
+them, but the 1.5 s p95 target was not met under shared load. Pass
+`auto_crop=False` to trade focus for speed.
+
+`FASHION_FINDER_ONNX_THREADS` caps ONNX Runtime threads per model (default: all
+cores). It helped only under heavy contention (load 12) and hurt at load 6, so
+leave it unset unless the CPU is oversubscribed. Policy checks for photo search
+run nearest first and stop after 200 eligible offers, so they no longer grow with
+the index (60–85 ms here instead of about 300 ms).
 
 ## Measure before trusting a model
 

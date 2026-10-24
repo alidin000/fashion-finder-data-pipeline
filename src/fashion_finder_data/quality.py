@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -83,6 +84,54 @@ def _metrics(rows: list[dict[str, Any]], now: datetime, cutoff: datetime) -> dic
     return counts
 
 
+COVERAGE = {
+    "price": lambda row: row["price_amount"] is not None and row["currency"] is not None,
+    "image": lambda row: row["image_urls"] not in (None, "", "[]"),
+    "brand": lambda row: bool(row["brand"]),
+    "description": lambda row: bool(row["description"]),
+    "colour": lambda row: row["colour_names"] not in (None, "", "[]"),
+    "size": lambda row: row["size_options"] not in (None, "", "[]"),
+    "sku": lambda row: bool(row["source_product_id"]),
+    "original_price": lambda row: row["original_price_amount"] is not None,
+    "known_availability": lambda row: row["availability_status"] != "unknown",
+    "mapped_category": lambda row: row["category"] is not None,
+    "checked_by_refresh": lambda row: row.get("last_checked_at") is not None,
+}
+
+
+def _source_section(engine: Database, source: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Field coverage of stored offers plus the latest run's invalid rows and reasons."""
+    from django.apps import apps
+
+    total = len(rows)
+    Run = apps.get_model("catalogue", "CollectionRun")
+    latest = (
+        Run.objects.using(engine.alias)
+        .filter(source_key=source)
+        .exclude(adapter_version__in=["refresh-cycle-v1", "api-ingest-v1"])
+        .order_by("-started_at")
+        .values("run_id", "started_at", "records_seen", "records_rejected", "error_summary")
+        .first()
+    )
+    return {
+        "offers": total,
+        "field_coverage": {
+            name: round(sum(1 for row in rows if check(row)) / total, 3) if total else 0.0
+            for name, check in COVERAGE.items()
+        },
+        "status": dict(sorted(Counter(row["status"] for row in rows).items())),
+        "latest_run": None
+        if latest is None
+        else {
+            "run_id": latest["run_id"],
+            "started_at": latest["started_at"],
+            "records_seen": latest["records_seen"],
+            "invalid_rows": latest["records_rejected"],
+            "reasons": json.loads(latest["error_summary"] or "{}"),
+        },
+    }
+
+
 def quality_report(
     engine: Database, *, stale_after_days: int = 7, as_of: datetime | None = None
 ) -> dict[str, Any]:
@@ -95,6 +144,9 @@ def quality_report(
     now = now.astimezone(UTC)
     cutoff = now - timedelta(days=stale_after_days)
     rows = offer_rows(engine)
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_source.setdefault(row["source_key"], []).append(row)
     grouped: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault((row["source_key"], row["category"]), []).append(row)
@@ -112,4 +164,8 @@ def quality_report(
                 grouped.items(), key=lambda item: (item[0][0], item[0][1] or "")
             )
         ],
+        "sources": {
+            source: _source_section(engine, source, source_rows)
+            for source, source_rows in sorted(by_source.items())
+        },
     }

@@ -30,6 +30,9 @@ services:
         value: fashion-finder-api.onrender.com,fashion-finder-api,localhost,127.0.0.1
       - key: FASHION_FINDER_DATA_DIR
         value: /tmp/fashion-finder-data
+      # The free instance has 512 MB: one gunicorn worker (2 measured 865 MB with models).
+      - key: WEB_CONCURRENCY
+        value: "1"
       - key: FASHION_FINDER_DEMO_MODE
         value: "1"
 
