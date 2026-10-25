@@ -16,7 +16,9 @@ if [ "${FASHION_FINDER_DEMO_MODE:-0}" = "1" ]; then
   fashion-finder-demo --data-dir "$data_dir"
 fi
 fashion-finder --data-dir "$data_dir" migrate
-if [ "${FASHION_FINDER_DEMO_MODE:-0}" != "1" ]; then
+# The hourly feed worker imports partner CSV files. FASHION_FINDER_FEED_WORKER=0 skips it
+# where offers arrive through the ingest API instead (the free Render plan).
+if [ "${FASHION_FINDER_DEMO_MODE:-0}" != "1" ] && [ "${FASHION_FINDER_FEED_WORKER:-1}" = "1" ]; then
   fashion-finder-worker --data-dir "$data_dir" --interval-seconds 3600 &
 fi
 # One worker by default: Render's free instance has 512 MB, and two workers with the image

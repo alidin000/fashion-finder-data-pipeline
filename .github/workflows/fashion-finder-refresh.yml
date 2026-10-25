@@ -1,7 +1,11 @@
 name: Fashion Finder product refresh
 
-# Refreshes due offers through the authenticated ingest API every 12 hours.
+# Updates the catalogue through the authenticated ingest API every 12 hours.
 # The runner keeps nothing: results go straight to the Django database.
+# Scheduled runs use the repository variable FASHION_FINDER_SCHEDULED_COMMAND, default
+# "discover": the free Render demo's database is temporary, so after a wipe nothing is
+# due for "refresh" and the catalogue must be found again. Set it to "refresh" once the
+# API has a persistent database.
 # The same command runs unchanged as a Render cron job or on a self-hosted runner;
 # see docs/scraper.md ("Scheduled refresh") before enabling this on a fork.
 
@@ -12,10 +16,10 @@ on:
   workflow_dispatch:
     inputs:
       command:
-        description: "refresh (due offers) or discover (find new offers)"
+        description: "discover (find offers; needed after the temporary database is wiped) or refresh (due offers)"
         type: choice
-        options: [refresh, discover]
-        default: refresh
+        options: [discover, refresh]
+        default: discover
       limit:
         description: "Offers to check this run (refresh) or per source (discover)"
         required: false
@@ -40,7 +44,7 @@ jobs:
       FASHION_FINDER_API_URL: ${{ secrets.FASHION_FINDER_API_URL }}
       FASHION_FINDER_API_TOKEN: ${{ secrets.FASHION_FINDER_API_TOKEN }}
       FASHION_FINDER_CONTACT_URL: ${{ vars.FASHION_FINDER_CONTACT_URL }}
-      COMMAND: ${{ inputs.command || 'refresh' }}
+      COMMAND: ${{ inputs.command || vars.FASHION_FINDER_SCHEDULED_COMMAND || 'discover' }}
       LIMIT: ${{ inputs.limit || '500' }}
       SOURCE: ${{ inputs.source || '' }}
     steps:
@@ -83,6 +87,12 @@ jobs:
       - name: Install Chromium (only for sources marked rendering = "browser")
         if: steps.config.outputs.ready == 'true' && steps.browser.outputs.needed == 'true'
         run: python -m playwright install --with-deps chromium
+      - name: Wake the API
+        if: steps.config.outputs.ready == 'true'
+        # A sleeping free Render instance takes about a minute to start.
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 15 \
+            --max-time 60 --output /dev/null "${FASHION_FINDER_API_URL%/}/api/v1/health"
       - name: Run
         if: steps.config.outputs.ready == 'true'
         run: |
@@ -90,7 +100,8 @@ jobs:
             set -- refresh --limit "$LIMIT" --time-budget-minutes 100
             [ -n "$SOURCE" ] && set -- "$@" --source "$SOURCE"
           else
-            set -- collect "${SOURCE:-all}" --limit "$LIMIT" --time-budget-minutes 100
+            set -- collect "${SOURCE:-all}" --all-categories --limit "$LIMIT" \
+              --time-budget-minutes 100
           fi
           # API mode: due offers come from the API and results go back to it in batches.
           fashion-finder "$@"

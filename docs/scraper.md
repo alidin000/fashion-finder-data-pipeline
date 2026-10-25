@@ -324,24 +324,55 @@ queue. Move only when cycle reports show the window at risk.
 
 ## Scheduled refresh on GitHub Actions
 
-`.github/workflows/fashion-finder-refresh.yml` runs `fashion-finder refresh` in API mode
-at 08:17 and 20:17 Budapest time, plus manual runs (`workflow_dispatch` with `command`,
-`limit`, `source`). It uses the same action versions as `ci.yml`, pip caching,
+`.github/workflows/fashion-finder-refresh.yml` runs in API mode at 08:17 and 20:17
+Budapest time, plus manual runs (`workflow_dispatch` with `command`, `limit`, `source`).
+Scheduled runs do `discover` (`collect all --all-categories`) unless the repository
+variable `FASHION_FINDER_SCHEDULED_COMMAND` is `refresh`: on a temporary database, nothing
+is due for `refresh` after a wipe. A first step waits up to three minutes for a sleeping
+API to wake. It uses the same action versions as `ci.yml`, pip caching,
 `permissions: contents: read`, a non-cancelling concurrency group and a 120-minute
 timeout; the run itself stops after 100 minutes. Chromium is installed only if a selected
 shop is marked `rendering = "browser"`. Nothing is committed or uploaded; only the job
 summary is written.
 
+### Hosted demo (free Render plan, temporary database)
+
+Since 25 October 2026 the free Render API (`render.yaml`) runs the real catalogue instead
+of the synthetic demo:
+
+- `FASHION_FINDER_DEMO_MODE=0`, with `FASHION_FINDER_SOURCE_POLICIES` pointing at
+  `config/source-policies.render-listing.json`. That policy publishes product names, HUF
+  prices and shop links for the five reviewed LPP shops, and **no retailer photos**: an
+  owner decision without retailer permission, recorded in its `evidence_ref`.
+  `tests/test_hosted_listing_policy.py` fails if photos are switched on.
+- Render generates `FASHION_FINDER_INGEST_TOKEN`; the feed worker is off.
+- The catalogue lives in `/tmp`, so it is **empty after every deploy and every wake-up**.
+  The free instance sleeps after 15 minutes without traffic, so expect the public site to
+  show products only for a while after a run. Start a manual run before showing it to
+  someone. A persistent database (a Render disk, or PostgreSQL once the app supports it)
+  removes this.
+- Photo search and match by look are unavailable there: the image models do not fit the
+  free instance's 512 MB with the API.
+
+Rehearsed on 25 October 2026 with the real `Dockerfile.api` image and those settings:
+discovery of 30 Reserved offers through the ingest API, all visible in `/api/v1/search`
+with no photo URLs; a POST without the token answered 401.
+
 ### Setup
 
-1. Create a token: `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'`.
-2. On the API host (Render), set `FASHION_FINDER_INGEST_TOKEN` to it and redeploy.
-   Use an API with a persistent database.
-3. In the GitHub repository: **Settings > Secrets and variables > Actions**, add the
-   secrets `FASHION_FINDER_API_TOKEN` (the same token) and `FASHION_FINDER_API_URL` (the
-   API's HTTPS base URL). Optionally add the variable `FASHION_FINDER_CONTACT_URL`.
-4. Start a first manual run: **Actions > Fashion Finder product refresh > Run workflow**,
-   `command = discover`, `limit = 300`. Then a `refresh` run. Read the job summary.
+1. After the Blueprint sync, open the `fashion-finder-api` service in Render,
+   **Environment**, and copy the generated `FASHION_FINDER_INGEST_TOKEN`. (Elsewhere,
+   create one with `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'` and
+   set it as `FASHION_FINDER_INGEST_TOKEN` on the API host.)
+2. In the GitHub repository: **Settings > Secrets and variables > Actions**, add the
+   secrets `FASHION_FINDER_API_TOKEN` (the same token) and `FASHION_FINDER_API_URL`
+   (`https://fashion-finder-api.onrender.com` for the hosted demo). Optionally add the
+   variable `FASHION_FINDER_CONTACT_URL`.
+3. Start a first manual run: **Actions > Fashion Finder product refresh > Run workflow**
+   (`command = discover`, `limit = 500`). Read the job summary, then open the site.
+4. With a persistent database, set the repository variable
+   `FASHION_FINDER_SCHEDULED_COMMAND` to `refresh` so scheduled runs re-check known offers
+   instead of rediscovering them.
 
 Without the secrets (forks, or before setup) the job prints a notice and ends green.
 `fashion-finder refresh` exits 0 when it finished its budget, even if a shop was stopped

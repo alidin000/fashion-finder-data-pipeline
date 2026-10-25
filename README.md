@@ -267,9 +267,11 @@ Private task inputs stay outside Git; the report excludes queries and photos.
 - **Scheduled refresh:** `.github/workflows/fashion-finder-refresh.yml` runs at
   08:17 and 20:17 Budapest time and posts results to the token-protected ingest
   API. It skips until the `FASHION_FINDER_API_URL` and `FASHION_FINDER_API_TOKEN`
-  secrets exist and the API has a persistent database; the free Render demo's
-  database is temporary. The same command runs as a Render cron job or on a
-  self-hosted runner ([scraper guide](docs/scraper.md)).
+  secrets exist. The hosted Render demo now shows the real shops (names, prices
+  and links, no photos) from a **temporary** database that empties on every
+  wake-up, so scheduled runs rediscover the catalogue; see "Hosted demo" in the
+  [scraper guide](docs/scraper.md). The same command runs as a Render cron job or
+  on a self-hosted runner.
 - **Playwright:** optional Chromium rendering, used only for shops marked as
   needing JavaScript. It does not guarantee access to a blocked storefront.
 - **Crawlee:** compared with Scrapy on a local fixture; it is not required at

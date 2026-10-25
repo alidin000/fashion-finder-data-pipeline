@@ -17,6 +17,8 @@ RUN if [ "$FASHION_FINDER_INSTALL_IMAGE_MODEL" = "1" ]; then \
     fi
 COPY manage.py ./
 COPY scripts/render-api-start.sh ./scripts/
+# The hosted listing policy (render.yaml points FASHION_FINDER_SOURCE_POLICIES at it).
+COPY config/source-policies.render-listing.json ./config/
 RUN python manage.py collectstatic --noinput
 # Render SSH and shell sessions need a named user with a shell and ~/.ssh.
 RUN groupadd --gid 1000 app \

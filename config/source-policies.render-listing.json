@@ -1,0 +1,67 @@
+[
+  {
+    "source_key": "reserved",
+    "market_code": "HU",
+    "approval_status": "approved",
+    "evidence_ref": "public demo listing (names, prices, links; no photos): owner decision 2026-10-25; no retailer permission",
+    "access_method": "public storefront pages (robots.txt honoured)",
+    "allow_public_listing": true,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": "Product data: Reserved (hu)",
+    "freshness_hours": 72,
+    "policy_version": "render-listing-2026-10-25"
+  },
+  {
+    "source_key": "sinsay",
+    "market_code": "HU",
+    "approval_status": "approved",
+    "evidence_ref": "public demo listing (names, prices, links; no photos): owner decision 2026-10-25; no retailer permission",
+    "access_method": "public storefront pages (robots.txt honoured)",
+    "allow_public_listing": true,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": "Product data: Sinsay (hu)",
+    "freshness_hours": 72,
+    "policy_version": "render-listing-2026-10-25"
+  },
+  {
+    "source_key": "mohito",
+    "market_code": "HU",
+    "approval_status": "approved",
+    "evidence_ref": "public demo listing (names, prices, links; no photos): owner decision 2026-10-25; no retailer permission",
+    "access_method": "public storefront pages (robots.txt honoured)",
+    "allow_public_listing": true,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": "Product data: Mohito (hu)",
+    "freshness_hours": 72,
+    "policy_version": "render-listing-2026-10-25"
+  },
+  {
+    "source_key": "house",
+    "market_code": "HU",
+    "approval_status": "approved",
+    "evidence_ref": "public demo listing (names, prices, links; no photos): owner decision 2026-10-25; no retailer permission",
+    "access_method": "public storefront pages (robots.txt honoured)",
+    "allow_public_listing": true,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": "Product data: House (hu)",
+    "freshness_hours": 72,
+    "policy_version": "render-listing-2026-10-25"
+  },
+  {
+    "source_key": "cropp",
+    "market_code": "HU",
+    "approval_status": "approved",
+    "evidence_ref": "public demo listing (names, prices, links; no photos): owner decision 2026-10-25; no retailer permission",
+    "access_method": "public storefront pages (robots.txt honoured)",
+    "allow_public_listing": true,
+    "allow_image_display": false,
+    "allow_image_processing": false,
+    "attribution": "Product data: Cropp (hu)",
+    "freshness_hours": 72,
+    "policy_version": "render-listing-2026-10-25"
+  }
+]

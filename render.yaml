@@ -1,6 +1,11 @@
-# Free Render Blueprint for the synthetic Fashion Finder demo.
-# Both services use the Free plan. The API's temporary /tmp data is reseeded at
-# startup; it is intentionally not a persistent real-product catalogue.
+# Free Render Blueprint for the public Fashion Finder demo.
+# Both services use the Free plan. The API keeps its catalogue in temporary /tmp
+# storage: it is empty after every deploy and every wake-up (the free instance sleeps
+# after 15 minutes without traffic). The scheduled GitHub Actions run
+# (.github/workflows/fashion-finder-refresh.yml) refills it through the token-protected
+# ingest API. Public display follows config/source-policies.render-listing.json:
+# product names, prices and shop links only, no retailer photos (owner decision
+# 2026-10-25, without retailer permission).
 services:
   - type: web
     name: fashion-finder-api
@@ -21,6 +26,7 @@ services:
         - manage.py
         - src/**
         - scripts/render-api-start.sh
+        - config/source-policies.render-listing.json
     envVars:
       - key: PORT
         value: "10000"
@@ -33,8 +39,18 @@ services:
       # The free instance has 512 MB: one gunicorn worker (2 measured 865 MB with models).
       - key: WEB_CONCURRENCY
         value: "1"
+      # Real shops instead of the synthetic demo catalogue.
       - key: FASHION_FINDER_DEMO_MODE
-        value: "1"
+        value: "0"
+      - key: FASHION_FINDER_SOURCE_POLICIES
+        value: /app/config/source-policies.render-listing.json
+      # Offers arrive through the ingest API, not partner CSV files.
+      - key: FASHION_FINDER_FEED_WORKER
+        value: "0"
+      # Bearer token for /api/v1/ingest/*. Copy it from the Render dashboard into the
+      # GitHub secret FASHION_FINDER_API_TOKEN (docs/scraper.md, "Hosted demo").
+      - key: FASHION_FINDER_INGEST_TOKEN
+        generateValue: true
 
   - type: web
     name: fashion-finder-web
