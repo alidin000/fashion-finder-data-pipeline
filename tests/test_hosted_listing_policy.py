@@ -1,9 +1,10 @@
-"""The hosted demo's policy publishes names, prices and links, never retailer photos."""
+"""The hosted demo's policy: the five reviewed shops, with photos from the shops' own servers."""
 
 from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fashion_finder_data.public_catalogue import search_public_catalogue
 from fashion_finder_data.schema import RetailerOffer, utc_now
@@ -13,18 +14,21 @@ from fashion_finder_data.storage import open_database, upsert_offer
 HOSTED_POLICY = Path(__file__).resolve().parents[1] / "config/source-policies.render-listing.json"
 
 
-def test_hosted_policy_lists_the_reviewed_shops_without_any_photo_rights() -> None:
+def test_hosted_policy_covers_the_reviewed_shops_and_records_the_owner_decision() -> None:
     policies = load_policies(HOSTED_POLICY)
 
     assert {key for key, _ in policies} == {"reserved", "sinsay", "mohito", "house", "cropp"}
     for policy in policies.values():
-        assert policy.allow_public_listing
-        assert not policy.allow_image_display and not policy.allow_image_processing
+        assert policy.allow_public_listing and policy.allow_image_display
+        # The approval is an owner decision without retailer permission; it must say so.
+        assert "owner decision" in policy.evidence_ref
+        assert "no retailer permission" in policy.evidence_ref
 
 
-def test_hosted_search_shows_the_offer_but_not_its_photo(tmp_path) -> None:
+def test_hosted_search_links_photos_on_the_shop_server_and_hides_foreign_ones(tmp_path) -> None:
     database = open_database(tmp_path / "fashion_finder.sqlite")
     url = "https://www.reserved.com/hu/hu/gyapju-kabat-101aa-99x"
+    shop_photo = "https://static.reserved.com/media/101AA-99X.jpg"
     upsert_offer(
         database,
         RetailerOffer(
@@ -35,7 +39,7 @@ def test_hosted_search_shows_the_offer_but_not_its_photo(tmp_path) -> None:
             title="Gyapjú kabát",
             price_amount=Decimal(39995),
             currency="HUF",
-            image_urls=["https://static.reserved.com/media/101AA-99X.jpg"],
+            image_urls=[shop_photo, "http://static.reserved.com/insecure.jpg"],
             availability_status="in_stock",
             source_fetched_at=utc_now(),
         ),
@@ -44,5 +48,8 @@ def test_hosted_search_shows_the_offer_but_not_its_photo(tmp_path) -> None:
     items = search_public_catalogue(database, load_policies(HOSTED_POLICY), query="kabát")["items"]
 
     assert [item["title"] for item in items] == ["Gyapjú kabát"]
-    assert items[0]["image_urls"] == []
-    assert items[0]["source_url"] == url
+    # Photos are shown from the shop's own HTTPS image server, never a copy or plain HTTP.
+    assert items[0]["image_urls"] == [shop_photo]
+    assert all(
+        urlsplit(photo).hostname.endswith("reserved.com") for photo in items[0]["image_urls"]
+    )

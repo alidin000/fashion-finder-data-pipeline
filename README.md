@@ -267,8 +267,9 @@ Private task inputs stay outside Git; the report excludes queries and photos.
 - **Scheduled refresh:** `.github/workflows/fashion-finder-refresh.yml` runs at
   08:17 and 20:17 Budapest time and posts results to the token-protected ingest
   API. It skips until the `FASHION_FINDER_API_URL` and `FASHION_FINDER_API_TOKEN`
-  secrets exist. The hosted Render demo now shows the real shops (names, prices
-  and links, no photos) from a **temporary** database that empties on every
+  secrets exist. The hosted Render demo now shows the real shops (names, prices,
+  links, and photos from the shops' own servers; word search only) from a
+  **temporary** database that empties on every
   wake-up, so scheduled runs rediscover the catalogue; see "Hosted demo" in the
   [scraper guide](docs/scraper.md). The same command runs as a Render cron job or
   on a self-hosted runner.

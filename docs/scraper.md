@@ -342,21 +342,24 @@ of the synthetic demo:
 
 - `FASHION_FINDER_DEMO_MODE=0`, with `FASHION_FINDER_SOURCE_POLICIES` pointing at
   `config/source-policies.render-listing.json`. That policy publishes product names, HUF
-  prices and shop links for the five reviewed LPP shops, and **no retailer photos**: an
-  owner decision without retailer permission, recorded in its `evidence_ref`.
-  `tests/test_hosted_listing_policy.py` fails if photos are switched on.
+  prices, shop links and photos for the five reviewed LPP shops, and approves photo
+  processing for photo search: an owner decision without retailer permission, recorded
+  in its `evidence_ref`. Photos load directly from each shop's own HTTPS image server;
+  the site never stores or serves copies (`tests/test_hosted_listing_policy.py`).
 - Render generates `FASHION_FINDER_INGEST_TOKEN`; the feed worker is off.
 - The catalogue lives in `/tmp`, so it is **empty after every deploy and every wake-up**.
   The free instance sleeps after 15 minutes without traffic, so expect the public site to
   show products only for a while after a run. Start a manual run before showing it to
   someone. A persistent database (a Render disk, or PostgreSQL once the app supports it)
   removes this.
-- Photo search and match by look are unavailable there: the image models do not fit the
-  free instance's 512 MB with the API.
+- Photo search and match by look are still unavailable there, although approved: both
+  need a photo index (photos downloaded and encoded by the model), and this free
+  instance has 0.1 CPU and 512 MB and loses its files on every wake-up. Building the
+  index elsewhere and uploading it, or a larger plan with a disk, would enable them.
 
-Rehearsed on 25 October 2026 with the real `Dockerfile.api` image and those settings:
-discovery of 30 Reserved offers through the ingest API, all visible in `/api/v1/search`
-with no photo URLs; a POST without the token answered 401.
+Rehearsed on 25 October 2026 with the real `Dockerfile.api` image and the listing-only
+version of that policy: discovery of 30 Reserved offers through the ingest API, all
+visible in `/api/v1/search`; a POST without the token answered 401.
 
 ### Setup
 

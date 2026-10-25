@@ -4,8 +4,10 @@
 # after 15 minutes without traffic). The scheduled GitHub Actions run
 # (.github/workflows/fashion-finder-refresh.yml) refills it through the token-protected
 # ingest API. Public display follows config/source-policies.render-listing.json:
-# product names, prices and shop links only, no retailer photos (owner decision
-# 2026-10-25, without retailer permission).
+# product names, prices, shop links and photos shown from the shops' own image
+# servers; photo processing is approved too (owner decision 2026-10-25, without
+# retailer permission). Photo search still needs a photo index, which this free
+# instance cannot build (docs/scraper.md, "Hosted demo").
 services:
   - type: web
     name: fashion-finder-api
