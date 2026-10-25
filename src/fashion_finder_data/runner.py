@@ -181,6 +181,29 @@ class ApiBackend:
             offset += len(batch)
         return results
 
+    def photos(self, source_key: str, *, after: int, limit: int, per_offer: int) -> dict:
+        """A page of offers whose photos may be indexed, with those already indexed."""
+        return self._call(
+            "GET",
+            "/api/v1/ingest/photos",
+            params={"source": source_key, "after": after, "limit": limit, "per_offer": per_offer},
+        )
+
+    def push_photo_vectors(
+        self, feature_version: str, entries: list[dict], *, run_id: str
+    ) -> list[dict]:
+        """Upload at most 500 photo embeddings; per-entry ``indexed`` or ``rejected``."""
+        answer = self._call(
+            "POST",
+            "/api/v1/ingest/image-index",
+            body={"run_id": run_id, "feature_version": feature_version, "entries": entries},
+        )
+        return answer["results"]
+
+    def touch(self) -> None:
+        """Any request keeps a free Render instance awake (it sleeps after 15 idle minutes)."""
+        self._call("GET", "/api/v1/health")
+
 
 def _batches(items: list[dict]):
     batch: list[dict] = []
@@ -623,13 +646,16 @@ def markdown(report: dict[str, Any], title: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def publish(report: dict[str, Any], title: str) -> None:
-    """Print the JSON report; also append Markdown to the GitHub job summary if present."""
+def publish(report: dict[str, Any], title: str, render: Any = None) -> None:
+    """Print the JSON report; also append Markdown to the GitHub job summary if present.
+
+    ``render`` turns the report into Markdown (default: :func:`markdown`).
+    """
     print(json.dumps(report, ensure_ascii=False, default=str))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
-            stream.write(markdown(report, title))
+            stream.write((render or markdown)(report, title))
     if os.environ.get("GITHUB_ACTIONS") == "true":
         for key, row in report["sources"].items():
             stopped = row.get("stopped") or row.get("crawl", {}).get("stopped")

@@ -7,9 +7,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FASHION_FINDER_SERVE_STATIC=1
 
 WORKDIR /app
+# FASHION_FINDER_INSTALL_IMAGE_MODEL=1 (Render passes service env vars as build args) adds
+# photo search: ONNX Runtime and the pinned Marqo-FashionSigLIP INT8 vision model
+# (Apache-2.0, 94 MB) at /app/models/. The build fails unless the file has the pinned
+# SHA-256. Without the argument nothing is downloaded and the image stays as before.
+# The model comes before the source code, so a code change does not download it again.
+ARG FASHION_FINDER_INSTALL_IMAGE_MODEL=0
+RUN if [ "$FASHION_FINDER_INSTALL_IMAGE_MODEL" = "1" ]; then \
+      model=/app/models/fashion-siglip-vision-int8.onnx \
+      && mkdir -p /app/models \
+      && python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' \
+        "https://huggingface.co/Marqo/marqo-fashionSigLIP/resolve/c56244cc94f92419e8369fa71efdaf403b124ce8/onnx/vision_model_quantized.onnx" \
+        "$model" \
+      && sha256sum "$model" \
+      && echo "f1009cfce0eedd409f601e8351eedab72e8529641105eee6517821a9a634a2f4  $model" \
+        | sha256sum --check --strict; \
+    fi
 COPY pyproject.toml README.md ./
 COPY src ./src
-ARG FASHION_FINDER_INSTALL_IMAGE_MODEL=0
 RUN if [ "$FASHION_FINDER_INSTALL_IMAGE_MODEL" = "1" ]; then \
       python -m pip install --no-cache-dir '.[image-model]'; \
     else \

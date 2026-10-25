@@ -10,8 +10,11 @@ import logging
 import math
 import re
 import sys
+import threading
 from array import array
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -219,15 +222,8 @@ def build_image_index(
     if not indexed:
         raise ValueError(f"no eligible images to index; skipped: {dict(skipped)}")
     destination = database.path.parent / INDEX_FILE
-    temporary = destination.with_name(f".{INDEX_FILE}.tmp")
-    temporary.write_text(
-        json.dumps(
-            {"version": INDEX_VERSION, "feature_version": encoder.version, "entries": indexed},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    temporary.replace(destination)
+    with index_write_lock(destination):
+        _write_index(destination, encoder.version, indexed)
     return {
         "status": "indexed" if not skipped else "partial",
         "indexed_images": len(indexed),
@@ -236,6 +232,109 @@ def build_image_index(
         "index_path": str(destination),
         "retailer_rights_verified_by_tool": False,
     }
+
+
+_WRITE_LOCK = threading.Lock()
+_ENTRY_FIELDS = {
+    "offer_id": int,
+    "source_key": str,
+    "image_url": str,
+    "policy_version": str,
+    "sha256": str,
+    "features": str,
+}
+
+
+@contextmanager
+def index_write_lock(destination: Path) -> Iterator[None]:
+    """Serialise index writers: threads of this process, and processes via ``flock``."""
+    with _WRITE_LOCK:
+        try:
+            import fcntl
+        except ImportError:  # Windows: the thread lock is all there is
+            yield
+            return
+        with destination.with_name(f".{INDEX_FILE}.lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _write_index(destination: Path, feature_version: str, entries: list[dict[str, Any]]) -> None:
+    """Atomically replace the index file (format version 2); hold ``index_write_lock``."""
+    temporary = destination.with_name(f".{INDEX_FILE}.tmp")
+    temporary.write_text(
+        json.dumps(
+            {"version": INDEX_VERSION, "feature_version": feature_version, "entries": entries},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(destination)
+
+
+def stored_index_entries(database: Database, feature_version: str) -> list[dict[str, Any]]:
+    """The index file's entries as stored (features still base64), for one feature version.
+
+    A missing, unreadable or malformed file, or one built with another model or
+    preprocessing, has no entries for this version: an empty list.
+    """
+    path = database.path.parent / INDEX_FILE
+    try:
+        index = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        logger.warning("ignoring an unreadable image index at %s", path)
+        return []
+    if (
+        not isinstance(index, dict)
+        or index.get("version") != INDEX_VERSION
+        or index.get("feature_version") != feature_version
+        or not isinstance(index.get("entries"), list)
+    ):
+        return []
+    entries = index["entries"]
+    for entry in entries:
+        if not isinstance(entry, dict) or any(
+            not isinstance(entry.get(key), kind) for key, kind in _ENTRY_FIELDS.items()
+        ):
+            logger.warning("ignoring a malformed image index at %s", path)
+            return []
+    return entries
+
+
+def merge_index_entries(
+    database: Database, feature_version: str, entries: list[dict[str, Any]]
+) -> tuple[int, list[int]]:
+    """Add photo embeddings encoded elsewhere to the index, atomically.
+
+    Each entry has the fields :func:`build_image_index` writes. Entries of other offers
+    stay; an entry for an (offer, photo URL) pair already indexed replaces it. An index
+    built with another feature version is replaced, since its embeddings cannot be
+    compared. Returns the number of entries now indexed and the positions of
+    ``entries`` refused because the index already holds ``MAX_ENTRIES`` photos.
+    """
+    destination = database.path.parent / INDEX_FILE
+    with index_write_lock(destination):
+        keyed = {
+            (entry["offer_id"], entry["image_url"]): entry
+            for entry in stored_index_entries(database, feature_version)
+        }
+        refused = []
+        changed = False
+        for position, entry in enumerate(entries):
+            key = (entry["offer_id"], entry["image_url"])
+            if key not in keyed and len(keyed) >= MAX_ENTRIES:
+                refused.append(position)
+                continue
+            keyed[key] = {field: entry[field] for field in _ENTRY_FIELDS}
+            changed = True
+        if changed:
+            _write_index(destination, feature_version, list(keyed.values()))
+    return len(keyed), refused
 
 
 def _stack(entries: list[dict[str, Any]] | tuple[dict[str, Any], ...], length: int):

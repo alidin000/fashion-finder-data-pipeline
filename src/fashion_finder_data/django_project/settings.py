@@ -93,3 +93,18 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 if "*" in os.environ.get("FASHION_FINDER_CORS_ORIGINS", "").split(","):
     raise ValueError("CORS origins must be explicit")
+# The ingest audit lines (one per batch: token fingerprint, run id, counts) go to stderr,
+# which Render and `docker logs` keep; the root logger's default WARNING level drops them.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"audit": {"format": "%(asctime)s %(name)s %(message)s"}},
+    "handlers": {"audit": {"class": "logging.StreamHandler", "formatter": "audit"}},
+    "loggers": {
+        "fashion_finder_data.ingest.audit": {
+            "handlers": ["audit"],
+            "level": "INFO",
+            "propagate": False,
+        }
+    },
+}

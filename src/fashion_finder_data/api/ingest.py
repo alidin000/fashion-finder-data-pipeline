@@ -5,7 +5,11 @@ Routes (all need ``Authorization: Bearer <FASHION_FINDER_INGEST_TOKEN>``):
 - ``GET  /api/v1/ingest/known?source=&after=&limit=``: catalogue URLs, so discovery
   only fetches new products;
 - ``POST /api/v1/ingest/offers``: a batch of at most 500 refreshed, newly discovered
-  or failed offers, applied idempotently with per-item results.
+  or failed offers, applied idempotently with per-item results;
+- ``GET  /api/v1/ingest/photos?source=&limit=&per_offer=&after=``: visible offers whose
+  policy allows photo processing, with the photos still missing from the photo index;
+- ``POST /api/v1/ingest/image-index``: at most 500 photo embeddings encoded by a
+  runner, merged into the photo index with per-entry results.
 
 Without the environment variable the API answers 503 for every call; it never falls
 back to open access. Ingest only stores offers: source policies still decide what
@@ -24,13 +28,20 @@ import threading
 import time
 from collections import Counter, deque
 from datetime import UTC, datetime
+from typing import Any
 
 from django.db import DatabaseError
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import ValidationError
 
-from fashion_finder_data.api.views import _config
+from fashion_finder_data.api.views import _config, _image_model_path
+from fashion_finder_data.hosted_index import (
+    MAX_UPLOAD_ENTRIES,
+    ImageIndexUpload,
+    apply_image_upload,
+    photo_listing,
+)
 from fashion_finder_data.scheduler import (
     MAX_BATCH_ITEMS,
     BatchEnvelope,
@@ -42,7 +53,9 @@ from fashion_finder_data.scheduler import (
     save_run_row,
     summarise,
 )
+from fashion_finder_data.source_policy import load_policies
 from fashion_finder_data.sources import NON_RETAIL_SOURCES, SOURCES
+from fashion_finder_data.visual_encoder import get_encoder
 
 TOKEN_ENV = "FASHION_FINDER_INGEST_TOKEN"
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -123,6 +136,33 @@ def _limit(request, default: int, maximum: int) -> int | None:
     return value if 1 <= value <= maximum else None
 
 
+def _json_body(request) -> tuple[bytes | None, JsonResponse | None]:
+    """The raw JSON body, refused before parsing if it is too large or not JSON."""
+    try:
+        declared = int(request.META.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        declared = 0
+    if declared > MAX_BODY_BYTES:
+        return None, _error(f"request body exceeds {MAX_BODY_BYTES} bytes", 413)
+    body = request.read(MAX_BODY_BYTES + 1)
+    if len(body) > MAX_BODY_BYTES:
+        return None, _error(f"request body exceeds {MAX_BODY_BYTES} bytes", 413)
+    if request.content_type != "application/json":
+        return None, _error("content type must be application/json", 415)
+    return body, None
+
+
+def _image_setup() -> tuple[Any, dict, Any, JsonResponse | None]:
+    """The catalogue, source policies and the photo-search encoder (``search_image``'s)."""
+    database, policy_path = _config()
+    policies = load_policies(policy_path) if policy_path and policy_path.is_file() else {}
+    try:
+        encoder = get_encoder(_image_model_path())
+    except ValueError as exc:
+        return database, policies, None, _error(f"the image model is unavailable: {exc}", 503)
+    return database, policies, encoder, None
+
+
 @csrf_exempt
 def due(request):
     _actor_name, problem = _guard(request, "GET")
@@ -171,17 +211,9 @@ def offers(request):
     actor, problem = _guard(request, "POST")
     if problem is not None:
         return problem
-    try:
-        declared = int(request.META.get("CONTENT_LENGTH") or 0)
-    except ValueError:
-        declared = 0
-    if declared > MAX_BODY_BYTES:
-        return _error(f"request body exceeds {MAX_BODY_BYTES} bytes", 413)
-    body = request.read(MAX_BODY_BYTES + 1)
-    if len(body) > MAX_BODY_BYTES:
-        return _error(f"request body exceeds {MAX_BODY_BYTES} bytes", 413)
-    if request.content_type != "application/json":
-        return _error("content type must be application/json", 415)
+    body, problem = _json_body(request)
+    if problem is not None:
+        return problem
     try:
         envelope = BatchEnvelope.model_validate(json.loads(body))
     except (ValueError, ValidationError) as exc:
@@ -227,3 +259,99 @@ def offers(request):
         json.dumps(dict(counts), sort_keys=True),
     )
     return JsonResponse({"run_id": envelope.run_id, "counts": dict(counts), "results": results})
+
+
+@csrf_exempt
+def photos(request):
+    """Visible offers whose photos may be processed, and which are already indexed."""
+    _actor_name, problem = _guard(request, "GET")
+    if problem is not None:
+        return problem
+    source, problem = _source(request)
+    if problem is not None:
+        return problem
+    limit = _limit(request, 500, 1000)
+    try:
+        per_offer = int(request.GET.get("per_offer", 1))
+        after = int(request.GET.get("after", 0))
+    except ValueError:
+        per_offer = after = -1
+    if limit is None or not 1 <= per_offer <= 8 or after < 0:
+        return _error("limit must be 1–1000, per_offer 1–8 and after a nonnegative id", 400)
+    database, policies, encoder, problem = _image_setup()
+    if problem is not None:
+        return problem
+    try:
+        offers, cursor = photo_listing(
+            database,
+            policies,
+            encoder.version,
+            source,
+            after_id=after,
+            limit=limit,
+            per_offer=per_offer,
+        )
+    except DatabaseError:
+        return _error("the catalogue is busy; try again shortly", 503)
+    return JsonResponse(
+        {
+            "source": source,
+            "feature_version": encoder.version,
+            "offers": offers,
+            "next_after": cursor,
+        }
+    )
+
+
+@csrf_exempt
+def image_index(request):
+    """Merge photo embeddings encoded by a runner into the photo index."""
+    actor, problem = _guard(request, "POST")
+    if problem is not None:
+        return problem
+    body, problem = _json_body(request)
+    if problem is not None:
+        return problem
+    try:
+        upload = ImageIndexUpload.model_validate(json.loads(body))
+    except (ValueError, ValidationError) as exc:
+        too_many = isinstance(exc, ValidationError) and any(
+            error.get("type") == "too_long" for error in exc.errors()
+        )
+        if too_many:
+            return _error(f"an upload holds at most {MAX_UPLOAD_ENTRIES} entries", 413)
+        return _error("body must be JSON with feature_version and an entries list", 400)
+    database, policies, encoder, problem = _image_setup()
+    if problem is not None:
+        return problem
+    if upload.feature_version != encoder.version:
+        return _error(
+            f"feature_version {upload.feature_version} does not match this API's image"
+            f" encoder {encoder.version}; encode with the same model",
+            400,
+        )
+    try:
+        outcome = apply_image_upload(database, policies, encoder, upload.entries)
+    except DatabaseError:
+        return _error("the catalogue is busy; try again shortly", 503)
+    results = outcome["results"]
+    counts = Counter(result["status"] for result in results)
+    reasons = Counter(result["reason"] for result in results if result["status"] == "rejected")
+    audit_log.info(
+        "image index batch actor=%s run=%s entries=%d results=%s rejected=%s index_entries=%d",
+        actor,
+        upload.run_id,
+        len(results),
+        json.dumps(dict(counts), sort_keys=True),
+        json.dumps(dict(reasons.most_common(5)), ensure_ascii=False),
+        outcome["index_entries"],
+    )
+    return JsonResponse(
+        {
+            "run_id": upload.run_id,
+            "feature_version": encoder.version,
+            "counts": dict(counts),
+            "results": results,
+            "index_entries": outcome["index_entries"],
+        }
+    )

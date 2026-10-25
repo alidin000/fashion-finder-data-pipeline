@@ -7,8 +7,8 @@ Hungarian or English) and **photo search** (upload a photo, find similar items).
 
 **Live demo:** <https://fashion-finder-web.onrender.com>. It runs on Render's free
 plan: the first visit wakes it (about a minute), and its catalogue is refilled by a
-scheduled run ([hosted demo](#hosted-demo)). The full experience, with photo search,
-runs locally on real products or on the licence-safe practice catalogue.
+scheduled run ([hosted demo](#hosted-demo)). It has word and photo search; match by
+look runs locally, on real products or on the licence-safe practice catalogue.
 
 This is a working prototype, not a public shopping service. What each shop's products
 may show is an owner decision recorded in a source policy; the repository's default
@@ -169,6 +169,7 @@ person wearing the product is not measured: no licence-safe test set exists.
 | `POST /api/v1/search/image` | Photo search over an enabled photo index (or the five demo samples); returns what it understood in `query`. Uploads: up to 5 MB and 2048×2048 px; the page sends 1024 px. |
 | `POST /api/v1/events` | Coarse daily metrics, only when analytics is enabled. |
 | `GET /api/v1/ingest/due`, `GET /api/v1/ingest/known`, `POST /api/v1/ingest/offers` | Token-only API for a refresh runner (503 unless `FASHION_FINDER_INGEST_TOKEN` is set); never publishes by itself and refuses demo and practice rows. |
+| `GET /api/v1/ingest/photos`, `POST /api/v1/ingest/image-index` | Same token. A runner builds the photo index: it asks which permitted photos are missing, then uploads their vectors (never the photos). |
 
 ### Where the code lives
 
@@ -179,6 +180,7 @@ person wearing the product is not measured: no licence-safe test set exists.
 | `src/fashion_finder_data/source_definitions.toml`, `sources.py` | Every shop as validated configuration (hosts, start pages, sitemaps, status). |
 | `src/fashion_finder_data/scheduler.py`, `runner.py`, `api/ingest.py` | Refresh queue, backoff, removal rules and the API-mode runner. |
 | `src/fashion_finder_data/image_fetch.py`, `image_index.py`, `query_understanding.py`, `visual_encoder.py` | Photo download, photo index, auto focus, zero-shot reading and the pinned models. |
+| `src/fashion_finder_data/photo_runner.py`, `hosted_index.py` | `index-photos`: a runner encodes permitted photos and uploads vectors; the API checks and merges them into the photo index. |
 | `src/fashion_finder_data/text_match.py`, `hungarian.py`, `look_query.py`, `look_search.py`, `product_text.py` | Hungarian word handling, query reading and look-search ranking. |
 | `src/fashion_finder_data/practice/` | Licence-safe practice catalogue and the search benchmark. |
 | `src/fashion_finder_data/feed.py`, `refresh.py` | Partner feed import and the feed worker. |
@@ -308,14 +310,19 @@ on Render's free plan, in Frankfurt.
   image server. This follows `config/source-policies.render-listing.json`, an owner
   decision of 25 October 2026 made without the shops' permission and recorded in its
   `evidence_ref`.
-- **Search:** words and filters. Photo search and match by look are not available on
-  the hosted demo yet: the free instance (0.1 CPU, 512 MB) cannot build a photo index.
+- **Search:** words and filters, and photo search. The free instance (0.1 CPU, 512 MB)
+  cannot build a photo index, so the scheduled run builds it: it downloads photos
+  politely, encodes them with the pinned INT8 vision model and uploads only the
+  vectors. A photo search takes about 5 seconds there. Match by look is off: its text
+  model does not fit in 512 MB beside the vision model.
 - **Data:** the catalogue lives in temporary storage. It is empty after every deploy
   and every wake-up, and the free instance sleeps after 15 minutes without visitors.
   The [refresh workflow](.github/workflows/fashion-finder-refresh.yml) rediscovers the
-  catalogue at 08:17 and 20:17 Budapest time through the token-protected ingest API;
-  start it by hand (**Actions → Fashion Finder product refresh → Run workflow**) before
-  showing the site to someone.
+  catalogue at 08:17 and 20:17 Budapest time through the token-protected ingest API,
+  then rebuilds the photo index. Vectors (never photos) are kept between runs in an
+  `actions/cache` embedding cache: a first run needs about 45 minutes of photo
+  downloads, later runs a minute or two. Start it by hand (**Actions → Fashion Finder
+  product refresh → Run workflow**) before showing the site to someone.
 - **Setup once:** copy the generated `FASHION_FINDER_INGEST_TOKEN` from the Render API
   service's **Environment** page into the GitHub repository secret
   `FASHION_FINDER_API_TOKEN`, and set the secret `FASHION_FINDER_API_URL` to
@@ -364,11 +371,16 @@ Private task inputs stay outside Git; the report excludes queries and photos.
   08:17 and 20:17 Budapest time and posts results to the token-protected ingest
   API. It skips until the `FASHION_FINDER_API_URL` and `FASHION_FINDER_API_TOKEN`
   secrets exist. The hosted Render demo now shows the real shops (names, prices,
-  links, and photos from the shops' own servers; word search only) from a
-  **temporary** database that empties on every
-  wake-up, so scheduled runs rediscover the catalogue; see "Hosted demo" in the
-  [scraper guide](docs/scraper.md). The same command runs as a Render cron job or
-  on a self-hosted runner.
+  links, and photos from the shops' own servers) with word search and **photo
+  search**; look search stays off (its text model does not fit in 512 MB). Its
+  database and photo index are **temporary** and empty on every wake-up, so
+  scheduled runs rediscover the catalogue and then run `index-photos`: that step
+  downloads photos politely, encodes them with the pinned INT8 vision model and
+  uploads only the vectors, keeping them in an `actions/cache` embedding cache
+  (vectors only, never photos). A first run with an empty cache needs about 45
+  minutes for ~1,350 photos; later runs rebuild the wiped index from the cache in a
+  minute or two. See "Hosted demo" in the [scraper guide](docs/scraper.md). The
+  same commands run as a Render cron job or on a self-hosted runner.
 - **Playwright:** optional Chromium rendering, used only for shops marked as
   needing JavaScript. It does not guarantee access to a blocked storefront.
 - **Crawlee:** compared with Scrapy on a local fixture; it is not required at

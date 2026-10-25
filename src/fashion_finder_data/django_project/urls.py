@@ -17,5 +17,7 @@ urlpatterns = [
     path("api/v1/ingest/due", ingest.due),
     path("api/v1/ingest/known", ingest.known),
     path("api/v1/ingest/offers", ingest.offers),
+    path("api/v1/ingest/photos", ingest.photos),
+    path("api/v1/ingest/image-index", ingest.image_index),
     path("api/v1/practice/images/<path:name>", practice_image),
 ]

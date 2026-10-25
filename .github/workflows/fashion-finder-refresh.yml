@@ -6,6 +6,12 @@ name: Fashion Finder product refresh
 # "discover": the free Render demo's database is temporary, so after a wipe nothing is
 # due for "refresh" and the catalogue must be found again. Set it to "refresh" once the
 # API has a persistent database.
+# After the catalogue run, "index-photos" builds the API's photo index: it downloads
+# photos politely, encodes them with the pinned INT8 vision model and uploads only the
+# vectors. Vectors (never photos) are kept between runs with actions/cache, so after the
+# free API's wipe-on-sleep the index is rebuilt without downloading the photos again.
+# Time plan (job limit 120 min): setup ~3, wake <=3, catalogue run 50 (+2 to upload),
+# model and cache ~2, photo index 45 (+1), cache save ~1 = at most ~107 min.
 # The same command runs unchanged as a Render cron job or on a self-hosted runner;
 # see docs/scraper.md ("Scheduled refresh") before enabling this on a fork.
 
@@ -47,6 +53,18 @@ jobs:
       COMMAND: ${{ inputs.command || vars.FASHION_FINDER_SCHEDULED_COMMAND || 'discover' }}
       LIMIT: ${{ inputs.limit || '500' }}
       SOURCE: ${{ inputs.source || '' }}
+      # Discovery or refresh stops after this; it was 100 before the photo index step.
+      CRAWL_BUDGET_MINUTES: "50"
+      # Photos: 4 of the 5 image hosts ask for Crawl-delay 10 s, so a cold cache indexes
+      # about 1,300 photos in 45 min; later runs reuse the cached vectors.
+      PHOTO_BUDGET_MINUTES: "45"
+      PHOTO_LIMIT: "1500"
+      # Marqo-FashionSigLIP INT8 vision tower (Apache-2.0), pinned to one revision and hash;
+      # the API (Dockerfile.api) downloads and checks the same file.
+      MODEL_URL: https://huggingface.co/Marqo/marqo-fashionSigLIP/resolve/c56244cc94f92419e8369fa71efdaf403b124ce8/onnx/vision_model_quantized.onnx
+      MODEL_SHA256: f1009cfce0eedd409f601e8351eedab72e8529641105eee6517821a9a634a2f4
+      MODEL_PATH: ${{ github.workspace }}/.fashion-finder/models/fashion-siglip-vision-int8.onnx
+      EMBEDDING_CACHE: ${{ github.workspace }}/.fashion-finder/embeddings
     steps:
       - name: Check configuration
         id: config
@@ -95,13 +113,67 @@ jobs:
             --max-time 60 --output /dev/null "${FASHION_FINDER_API_URL%/}/api/v1/health"
       - name: Run
         if: steps.config.outputs.ready == 'true'
+        timeout-minutes: 58
         run: |
           if [ "$COMMAND" = "refresh" ]; then
-            set -- refresh --limit "$LIMIT" --time-budget-minutes 100
+            set -- refresh --limit "$LIMIT" --time-budget-minutes "$CRAWL_BUDGET_MINUTES"
             [ -n "$SOURCE" ] && set -- "$@" --source "$SOURCE"
           else
             set -- collect "${SOURCE:-all}" --all-categories --limit "$LIMIT" \
-              --time-budget-minutes 100
+              --time-budget-minutes "$CRAWL_BUDGET_MINUTES"
           fi
           # API mode: due offers come from the API and results go back to it in batches.
           fashion-finder "$@"
+      - name: Install the image model runtime
+        if: steps.config.outputs.ready == 'true'
+        run: python -m pip install -e '.[image-model]'
+      - name: Restore the image model
+        id: model-cache
+        if: steps.config.outputs.ready == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.MODEL_PATH }}
+          key: fashion-siglip-vision-int8-${{ env.MODEL_SHA256 }}
+      - name: Download and verify the image model
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          if [ ! -f "$MODEL_PATH" ]; then
+            mkdir -p "$(dirname "$MODEL_PATH")"
+            curl --fail --location --silent --show-error --retry 3 --max-time 600 \
+              --output "$MODEL_PATH" "$MODEL_URL"
+          fi
+          # A restored or downloaded file must match the pinned hash; anything else stops here.
+          echo "$MODEL_SHA256  $MODEL_PATH" | sha256sum --check --strict
+      - name: Save the image model
+        if: steps.config.outputs.ready == 'true' && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.MODEL_PATH }}
+          key: fashion-siglip-vision-int8-${{ env.MODEL_SHA256 }}
+      - name: Restore the embedding cache
+        if: steps.config.outputs.ready == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.EMBEDDING_CACHE }}
+          # Cache entries are immutable: each run saves under its own key, and the
+          # newest earlier one is restored through the prefix.
+          key: fashion-finder-embeddings-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fashion-finder-embeddings-
+      - name: Index photos
+        if: steps.config.outputs.ready == 'true'
+        timeout-minutes: 50
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 15 \
+            --max-time 60 --output /dev/null "${FASHION_FINDER_API_URL%/}/api/v1/health"
+          set -- index-photos --limit "$PHOTO_LIMIT" --per-offer 1 --model-path "$MODEL_PATH" \
+            --cache-dir "$EMBEDDING_CACHE" --time-budget-minutes "$PHOTO_BUDGET_MINUTES"
+          [ -n "$SOURCE" ] && set -- "$@" --source "$SOURCE"
+          # Photos stay in memory until encoded; only vectors reach the cache and the API.
+          fashion-finder "$@"
+      - name: Save the embedding cache
+        # Also after a failed or timed-out step: the vectors already encoded are kept.
+        if: always() && steps.config.outputs.ready == 'true' && hashFiles('.fashion-finder/embeddings/embedding-cache.json') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.EMBEDDING_CACHE }}
+          key: fashion-finder-embeddings-${{ github.run_id }}-${{ github.run_attempt }}

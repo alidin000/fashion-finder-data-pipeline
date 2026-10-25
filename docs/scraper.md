@@ -45,7 +45,8 @@ source_definitions.toml ──► collectors.ProductSpider ──► structured_
 | `discovery.py` | Sitemap and sitemap-index parsing (gzip, `lastmod`), child rotation, refresh priorities, pagination rules. |
 | `scheduler.py` | Due queue on the offer table, refresh rules, removal confirmation, capacity and interval stretching, run rows. |
 | `runner.py` | Refresh and API-mode discovery; database or API backend; cycle report and Markdown job summary. |
-| `api/ingest.py` | Token-authenticated `due`, `known` and `offers` endpoints. |
+| `photo_runner.py` | `index-photos`: polite photo downloads, encoding, the vector-only embedding cache, uploads to the photo index. |
+| `api/ingest.py`, `hosted_index.py` | Token-authenticated `due`, `known`, `offers`, `photos` and `image-index` endpoints; per-entry checks and the photo-index merge. |
 | `crawl_state.py` | Local cache only: ETag/Last-Modified validators, TDMRep files, resumable discovery runs. |
 | `benchmark.py` | Per-retailer extraction benchmark. |
 | `replay.py` | Serves recorded responses instead of the network (tests, offline rehearsals). |
@@ -149,6 +150,8 @@ set, the cycle report is appended there as Markdown.
 | `GET /api/v1/ingest/due?source=&limit=` | Due offers (id, product URL, check URL and kind, price, sizes, `next_refresh_at`, failures) plus queue stats. Batched query, at most 5,000. |
 | `GET /api/v1/ingest/known?source=&after=&limit=` | Stored canonical URLs, paged by id, so discovery fetches only new products. |
 | `POST /api/v1/ingest/offers` | `{"run_id", "intervals", "items": [...], "cycle_report"}`; at most 500 items and 4 MB. Items are `observation` (a `RawProductRecord`), `not_modified`, `failure` (`gone` for 404/410/discontinued) or `missing`. Each item is validated with the repo's schema models and applied on its own: per-item `created`, `updated`, `unchanged`, `recorded` or `rejected` with a reason. |
+| `GET /api/v1/ingest/photos?source=&limit=&per_offer=&after=` | Visible offers whose policy allows photo processing, paged by id (at most 1,000): `source_key`, `offer_url`, `image_urls` (the best `per_offer`, as `select_photos` picks them) and `indexed_image_urls` (already in the index with the current policy version), plus the API's `feature_version`. Batched queries. |
+| `POST /api/v1/ingest/image-index` | `{"feature_version", "entries": [{"source_key", "offer_url", "image_url", "sha256", "features"}]}`; at most 500 entries and 4 MB; `features` is base64 little-endian float32. A `feature_version` other than the API's own encoder's answers 400 naming both. Each entry is rejected with a reason if its offer is unknown, a demo or practice row, or not visible; the photo is not on the offer; the policy does not allow photo processing; or the vector has the wrong length, non-finite values or (cosine models) is not unit length. Accepted entries are merged into `product-image-index.json` (other offers' entries stay, a re-uploaded photo is replaced, the current `policy_version` is stored, 20,000 photos at most) and written atomically under a lock. Per-entry `indexed` or `rejected`. |
 
 - Auth: `Authorization: Bearer <token>`, compared with `FASHION_FINDER_INGEST_TOKEN` by
   `hmac.compare_digest`. If the variable is unset or shorter than 32 characters, every
@@ -160,6 +163,8 @@ set, the cycle report is appended there as Markdown.
   api-ingest-v1`) with the token's fingerprint (`ingest-token:<sha256 prefix>`, never the
   token), the client run id, the runner's User-Agent and the counts; plus a log line on
   `fashion_finder_data.ingest.audit`. Cycle reports are stored as `refresh-cycle-v1` rows.
+  Each photo-index upload writes one audit log line (actor, run id, counts, top
+  rejection reasons, photos now indexed).
 - Ingest never approves publishing: source policies still decide what shoppers see.
 
 ## Add a source
@@ -289,8 +294,8 @@ database is a separate change. The local `crawl-state.sqlite` is only a cache.
 ### Option A: a Render cron job (proposed, not applied)
 
 The runner talks to the API, so the cron job needs no database access. Note that the
-current `render.yaml` API runs the synthetic demo with a temporary `/tmp` database; point
-a refresh job only at an API with a persistent database.
+current `render.yaml` API keeps its catalogue in a temporary `/tmp` database; a refresh
+job there must run `discover`, because nothing survives a wake-up to refresh.
 
 ```yaml
   - type: cron
@@ -329,11 +334,34 @@ Budapest time, plus manual runs (`workflow_dispatch` with `command`, `limit`, `s
 Scheduled runs do `discover` (`collect all --all-categories`) unless the repository
 variable `FASHION_FINDER_SCHEDULED_COMMAND` is `refresh`: on a temporary database, nothing
 is due for `refresh` after a wipe. A first step waits up to three minutes for a sleeping
-API to wake. It uses the same action versions as `ci.yml`, pip caching,
+API to wake. It uses the same checkout and setup-python versions as `ci.yml` (v7),
+`actions/cache/restore` and `save` v6 (the newest major; there is no v7), pip caching,
 `permissions: contents: read`, a non-cancelling concurrency group and a 120-minute
-timeout; the run itself stops after 100 minutes. Chromium is installed only if a selected
-shop is marked `rendering = "browser"`. Nothing is committed or uploaded; only the job
-summary is written.
+timeout. Chromium is installed only if a selected shop is marked `rendering = "browser"`.
+Nothing is committed and no photo is uploaded anywhere; only the job summary and the
+photo vectors (to the API and to `actions/cache`) leave the runner.
+
+After the catalogue run, the job builds the API's photo index with
+`fashion-finder index-photos` (described under "Hosted demo" below). Time plan, within
+the 120-minute job limit:
+
+| Stage | Minutes |
+|---|---|
+| Checkout, Python, install | ~3 |
+| Wake the API | at most 3 |
+| Discovery or refresh (`--time-budget-minutes 50`, was 100; step limit 58) | 50, plus ~2 to upload |
+| Image runtime, model (cached by its SHA-256) and embedding cache | ~2 |
+| `index-photos` (`--time-budget-minutes 45`; step limit 50) | 45, plus ~1 to upload |
+| Save the embedding cache | ~1 |
+| **Worst case** | **~107** |
+
+Discovery of 500 offers per shop normally ends long before 50 minutes; the budget is a
+ceiling. Four of the five image hosts (`static.reserved.com`, `static.mohito.com`,
+`static.housebrand.com`, `static.cropp.com`) ask for `Crawl-delay: 10`, Sinsay's for
+none, so with the five hosts interleaved a cold cache downloads about 270 photos per
+10-second host in 45 minutes: about 1,350 of the 1,500 offers' photos. The next run
+finishes the rest; after that, photos come from the cache and the step takes a minute or
+two.
 
 ### Hosted demo (free Render plan, temporary database)
 
@@ -352,14 +380,56 @@ of the synthetic demo:
   show products only for a while after a run. Start a manual run before showing it to
   someone. A persistent database (a Render disk, or PostgreSQL once the app supports it)
   removes this.
-- Photo search and match by look are still unavailable there, although approved: both
-  need a photo index (photos downloaded and encoded by the model), and this free
-  instance has 0.1 CPU and 512 MB and loses its files on every wake-up. Building the
-  index elsewhere and uploading it, or a larger plan with a disk, would enable them.
+- **Photo search works; look search does not.** The instance (0.1 CPU, 512 MB, files
+  wiped on sleep) cannot build a photo index, so the scheduled GitHub Actions run builds
+  it with `fashion-finder index-photos`:
+  1. `GET /api/v1/ingest/photos` lists, per shop, the visible offers whose policy allows
+     photo processing, each with its best photo (`--per-offer 1`) and whether it is
+     already indexed. Shops are taken in turn up to `--limit 1500` offers; offers
+     already indexed count, so the index stays at about that size.
+  2. Each photo not yet indexed comes from the **embedding cache** if it is there,
+     with no request at all. Otherwise it is downloaded with every `fetch-images`
+     check (robots.txt and its Crawl-delay, TDMRep on the image host and the shop's
+     site, `tdm-reservation` and `X-Robots-Tag: noai` headers, the retailer's own HTTPS
+     domains, 5 MB and pixel limits), encoded with the pinned INT8 vision model, and
+     its bytes dropped.
+  3. The vectors go to `POST /api/v1/ingest/image-index` in batches, at least every
+     four minutes, which also keeps the free instance awake during the step.
+- The embedding cache (`--cache-dir`, saved with `actions/cache` under a new key each
+  run and restored from the newest) holds **vectors only**: per photo URL its SHA-256,
+  ETag, Last-Modified, encoder version and fetch time. No photo file is ever written.
+  After 14 days (`--revalidate-days`) a cached photo is re-checked with a conditional
+  request (robots.txt and TDMRep are read again first); HTTP 304 or identical bytes keep
+  the vector. Vectors of another model, or not fetched for 60 days, are dropped.
+- The photo index sits beside the catalogue in `/tmp`, so it is **wiped on sleep like
+  the products**. The next scheduled run rediscovers the products, then rebuilds the
+  index from the cache: no photo is downloaded again, and `index-photos` takes a minute
+  or two. Only the first runs, with an empty cache, download photos (about 45 minutes
+  for ~1,350 photos; see the time plan above).
+- The API installs ONNX Runtime and the 94 MB INT8 vision model at build time
+  (`FASHION_FINDER_INSTALL_IMAGE_MODEL=1`; `Dockerfile.api` checks its SHA-256) and loads
+  it only to encode a shopper's uploaded photo. `FASHION_FINDER_ONNX_THREADS=1` matches
+  its 0.1 CPU. The text model is not installed: it does not fit in 512 MB beside the
+  vision model, so look search (`/api/v1/search/look`), photo auto-crop and zero-shot
+  category and colour reading stay off. Photo search works without them, as it does
+  locally without text model paths.
 
 Rehearsed on 25 October 2026 with the real `Dockerfile.api` image and the listing-only
 version of that policy: discovery of 30 Reserved offers through the ingest API, all
 visible in `/api/v1/search`; a POST without the token answered 401.
+
+Photo search rehearsed the same day with the image built with
+`FASHION_FINDER_INSTALL_IMAGE_MODEL=1` (model SHA-256 checked in the build log) and run
+with Render's start script and environment: discovery of 20 Reserved offers (4
+requests), then `index-photos --limit 20` downloaded, encoded and uploaded 20 photos in
+210 s (23 requests, 10 s apart on `static.reserved.com` as its robots.txt asks). A
+second run made no request; after the index file was deleted, a third rebuilt it from
+the cache with no request either. A Reserved photo re-encoded at 1024 px, as the page
+sends it, found its own offer first; `/api/v1/health` reported
+`image_search: available`. Memory after the photo query: 244 MiB (`docker stats`; cgroup
+peak 250 MiB). Limited like the free plan (0.1 CPU, 512 MB), the API answered 34 s after
+a restart, the first health check (loading the model) took 5.6 s, a photo search
+4.4–5.2 s, and memory stayed at 253 MiB.
 
 ### Setup
 
@@ -422,6 +492,9 @@ portable. The identical command runs elsewhere:
 
 ## Photos and feeds
 
+- `fashion-finder index-photos` (API mode) shares `fetch-images`' download checks
+  (`image_fetch.PolitePhotoFetcher`) but keeps no photo: it uploads vectors to the API
+  and caches only vectors. See "Hosted demo" above.
 - `fashion-finder fetch-images` keeps every policy, robots and TDMRep check and now: honours
   the image host's robots `Crawl-delay`; spaces requests per host and interleaves hosts;
   treats TDMRep 3xx answers without a target as "no file" (the LPP 301 bug); skips photos

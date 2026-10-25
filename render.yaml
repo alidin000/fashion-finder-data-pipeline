@@ -6,8 +6,11 @@
 # ingest API. Public display follows config/source-policies.render-listing.json:
 # product names, prices, shop links and photos shown from the shops' own image
 # servers; photo processing is approved too (owner decision 2026-10-25, without
-# retailer permission). Photo search still needs a photo index, which this free
-# instance cannot build (docs/scraper.md, "Hosted demo").
+# retailer permission). Photo search works: the same scheduled run downloads and
+# encodes the photos and uploads only their vectors, because this free instance
+# cannot build a photo index itself; the API loads the INT8 vision model only to
+# encode a shopper's photo. Look search (text model) stays off: memory.
+# (docs/scraper.md, "Hosted demo").
 services:
   - type: web
     name: fashion-finder-api
@@ -53,6 +56,20 @@ services:
       # GitHub secret FASHION_FINDER_API_TOKEN (docs/scraper.md, "Hosted demo").
       - key: FASHION_FINDER_INGEST_TOKEN
         generateValue: true
+      # Photo search. Render passes env vars to Docker builds as build args, so this one
+      # makes Dockerfile.api install ONNX Runtime and the pinned INT8 vision model
+      # (checked against its SHA-256 at build time) at the path below.
+      - key: FASHION_FINDER_INSTALL_IMAGE_MODEL
+        value: "1"
+      - key: FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT
+        value: "1"
+      - key: FASHION_FINDER_IMAGE_MODEL_PATH
+        value: /app/models/fashion-siglip-vision-int8.onnx
+      # 0.1 CPU: one ONNX thread; more would only compete for the same tenth of a core.
+      - key: FASHION_FINDER_ONNX_THREADS
+        value: "1"
+      # No FASHION_FINDER_TEXT_MODEL_PATH: the text model does not fit in 512 MB beside
+      # the vision model, so look search, auto-crop and zero-shot stay off here.
 
   - type: web
     name: fashion-finder-web

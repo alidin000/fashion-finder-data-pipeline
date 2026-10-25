@@ -8,7 +8,9 @@ shared CLI module.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
+import os
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,8 @@ from .crawl_state import CrawlStore, instant, product_key
 from .pipeline import ingest_records, write_report
 from .politeness import DEFAULT_DELAY_SECONDS, MIN_DELAY_SECONDS
 from .runner import (
+    API_TOKEN_ENV,
+    API_URL_ENV,
     ApiBackend,
     ApiError,
     DatabaseBackend,
@@ -28,7 +32,14 @@ from .runner import (
     run_refresh,
 )
 from .schema import RawProductRecord, RetailerOffer, utc_now
-from .sources import CRAWL_SOURCES, DEFAULT_COLLECT_SOURCES, SOURCES, Source, user_agent
+from .sources import (
+    CRAWL_SOURCES,
+    DEFAULT_COLLECT_SOURCES,
+    NON_RETAIL_SOURCES,
+    SOURCES,
+    Source,
+    user_agent,
+)
 from .storage import Database, open_database
 
 STATE_FILE = "crawl-state.sqlite"
@@ -115,6 +126,7 @@ def add_scraper_commands(commands: Any) -> None:
     )
     cycle.add_argument("--source", choices=SOURCES)
     cycle.add_argument("--json", action="store_true")
+    add_photo_command(commands)
     benchmark = commands.add_parser(
         "benchmark-extraction",
         help="Sample product pages per retailer and measure extraction, speed and cycle time",
@@ -123,6 +135,109 @@ def add_scraper_commands(commands: Any) -> None:
     benchmark.add_argument("--per-source", type=int, default=5, help="Product pages per retailer")
     benchmark.add_argument("--output", type=Path, help="Also write the JSON report here")
     _runner_options(benchmark, max_requests_default=30)
+
+
+def add_photo_command(commands: Any) -> None:
+    photos = commands.add_parser(
+        "index-photos",
+        help="Encode shop photos and upload their embeddings to the API's photo index",
+    )
+    photos.add_argument(
+        "--source",
+        action="append",
+        choices=[key for key in CRAWL_SOURCES if key not in NON_RETAIL_SOURCES],
+        help="Shop to index (repeatable; default: every reviewed shop)",
+    )
+    photos.add_argument(
+        "--limit",
+        type=int,
+        default=1500,
+        help="Offers in the photo index, shops in turn (1–20000; already indexed ones count)",
+    )
+    photos.add_argument("--per-offer", type=int, default=1, help="Photos per offer (1–8)")
+    photos.add_argument(
+        "--delay",
+        type=float,
+        default=2.0,
+        help="Seconds between requests to one image host (0.5–60; a longer Crawl-delay wins)",
+    )
+    model = os.environ.get("FASHION_FINDER_IMAGE_MODEL_PATH")
+    photos.add_argument(
+        "--model-path",
+        type=Path,
+        default=Path(model) if model else None,
+        help="The pinned ONNX vision model the API searches with",
+    )
+    photos.add_argument(
+        "--cache-dir",
+        type=Path,
+        help="Embedding cache, vectors only (default: <data-dir>/embedding-cache)",
+    )
+    photos.add_argument(
+        "--revalidate-days",
+        type=float,
+        default=14.0,
+        help="Re-check cached photos older than this with ETag/Last-Modified (default 14)",
+    )
+    photos.add_argument(
+        "--time-budget-minutes",
+        type=float,
+        default=None,
+        help="Stop downloading cleanly after this long; the rest waits for the next run",
+    )
+    photos.add_argument(
+        "--contact-url",
+        help="Contact URL announced in the User-Agent (default: $FASHION_FINDER_CONTACT_URL)",
+    )
+    photos.add_argument(
+        "--api-url",
+        help="The Fashion Finder API (token in $FASHION_FINDER_API_TOKEN);"
+        " default: $FASHION_FINDER_API_URL",
+    )
+
+
+def run_photo_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """``index-photos``: API mode only; the runner keeps nothing but the embedding cache."""
+    from .image_fetch import http_get
+    from .photo_runner import PhotoIndexError, photo_markdown, run_index_photos
+
+    if not 1 <= args.limit <= 20_000:
+        parser.error("--limit must be between 1 and 20000")
+    if not 1 <= args.per_offer <= 8:
+        parser.error("--per-offer must be between 1 and 8")
+    if not 0.5 <= args.delay <= 60:
+        parser.error("--delay must be between 0.5 and 60 seconds")
+    if not 0 < args.revalidate_days <= 365:
+        parser.error("--revalidate-days must be between 0 and 365")
+    if args.time_budget_minutes is not None and not 1 <= args.time_budget_minutes <= 24 * 60:
+        parser.error("--time-budget-minutes must be between 1 and 1440")
+    url = args.api_url or os.environ.get(API_URL_ENV)
+    if not url:
+        parser.error(f"index-photos uploads to the API: set {API_URL_ENV} or --api-url")
+    try:
+        agent = user_agent(args.contact_url)
+        backend = ApiBackend(url, os.environ.get(API_TOKEN_ENV, ""), contact=args.contact_url)
+    except ValueError as exc:
+        parser.error(str(exc))
+    sources = list(dict.fromkeys(args.source or DEFAULT_COLLECT_SOURCES))
+    try:
+        report = run_index_photos(
+            backend,
+            sources,
+            cache_dir=args.cache_dir or args.data_dir / "embedding-cache",
+            model_path=args.model_path,
+            limit=args.limit,
+            per_offer=args.per_offer,
+            delay=args.delay,
+            revalidate_days=args.revalidate_days,
+            time_budget_minutes=args.time_budget_minutes,
+            fetch=functools.partial(http_get, agent=agent),
+        )
+    except (ApiError, PhotoIndexError, ValueError) as exc:
+        print(json.dumps({"status": "error", "detail": str(exc)}))
+        return 1
+    publish(report, "Fashion Finder photo index", photo_markdown)
+    return 0
 
 
 def validate_runner_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
@@ -148,6 +263,8 @@ def validate_runner_args(args: argparse.Namespace, parser: argparse.ArgumentPars
 
 def handle_runner_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int | None:
     """Commands that may run without a local catalogue (API mode). None: not handled."""
+    if args.command == "index-photos":
+        return run_photo_command(args, parser)
     if args.command not in {"refresh", "benchmark-extraction", "collect"}:
         return None
     validate_runner_args(args, parser)

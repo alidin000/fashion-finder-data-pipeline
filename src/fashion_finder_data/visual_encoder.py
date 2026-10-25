@@ -8,6 +8,7 @@ import html
 import math
 import os
 import string
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -326,6 +327,10 @@ def unit_rows(np, matrix):
 
 
 COLOUR_LAYOUT = ColourLayoutEncoder()
+# lru_cache does not stop two threads from building the same model at once; on the
+# 512 MB hosted instance, two first requests (a health check and a search) must not
+# load it twice.
+_LOAD_LOCK = threading.Lock()
 
 
 @lru_cache(maxsize=2)
@@ -349,7 +354,8 @@ def get_encoder(
         raise ValueError("image model file is unavailable") from exc
     if not path.is_file():
         raise ValueError("image model path must be a file")
-    model = _cached_model(str(path), stat.st_size, stat.st_mtime_ns)
+    with _LOAD_LOCK:
+        model = _cached_model(str(path), stat.st_size, stat.st_mtime_ns)
     return model.with_options(aspect=aspect, flip_tta=flip_tta)
 
 
@@ -453,4 +459,5 @@ def get_text_encoder(model_path: Path | None, tokenizer_path: Path | None) -> On
         )
     except OSError as exc:
         raise ValueError("text model or tokenizer file is unavailable") from exc
-    return _cached_text(str(model), str(tokenizer), stamp)
+    with _LOAD_LOCK:
+        return _cached_text(str(model), str(tokenizer), stamp)

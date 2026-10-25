@@ -21,8 +21,8 @@ import re
 import time
 import urllib.error
 import urllib.request
-from collections import Counter
-from collections.abc import Callable, Mapping
+from collections import Counter, deque
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -64,8 +64,10 @@ class _SameSiteRedirects(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_SameSiteRedirects)
 
 
-def http_get(url: str, headers: Mapping[str, str] | None = None) -> Fetched:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+def http_get(
+    url: str, headers: Mapping[str, str] | None = None, *, agent: str = USER_AGENT
+) -> Fetched:
+    request = urllib.request.Request(url, headers={"User-Agent": agent, **(headers or {})})
     with _OPENER.open(request, timeout=20) as response:
         data = response.read(MAX_IMAGE_BYTES + 1)
         headers = {key.lower(): value for key, value in response.headers.items()}
@@ -195,18 +197,30 @@ def retailer_image_url(source_key: str, url: str) -> bool:
     return source is not None and (host == source.host or host.endswith("." + source.host))
 
 
-def _image_extension(data: bytes) -> str:
+def checked_image(data: bytes) -> Image.Image:
+    """The decoded photo; ValueError for another encoding, too many pixels or broken data."""
     try:
-        with Image.open(BytesIO(data)) as image:
-            extension = EXTENSIONS.get(image.format or "")
-            if extension is None:
-                raise ValueError("unsupported image encoding")
-            if image.width * image.height > MAX_IMAGE_PIXELS:
-                raise ValueError("image dimensions are too large")
-            image.load()
-            return extension
-    except (UnidentifiedImageError, OSError) as exc:
+        image = Image.open(BytesIO(data))
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ValueError("cannot decode image") from exc
+    try:
+        if image.format not in EXTENSIONS:
+            raise ValueError("unsupported image encoding")
+        if image.width * image.height > MAX_IMAGE_PIXELS:
+            raise ValueError("image dimensions are too large")
+        image.load()
+    except (OSError, Image.DecompressionBombError) as exc:
+        image.close()
+        raise ValueError("cannot decode image") from exc
+    except ValueError:
+        image.close()
+        raise
+    return image
+
+
+def _image_extension(data: bytes) -> str:
+    with checked_image(data) as image:
+        return EXTENSIONS[image.format]
 
 
 def _kept_entries(
@@ -234,36 +248,32 @@ def _kept_entries(
     return kept
 
 
+def in_turn[T](items: Iterable[T], group: Callable[[T], str]) -> list[T]:
+    """Items round-robin across their groups, keeping each group's own order."""
+    queues: dict[str, deque[T]] = {}
+    for item in items:
+        queues.setdefault(group(item), deque()).append(item)
+    ordered: list[T] = []
+    while queues:
+        for key in list(queues):
+            ordered.append(queues[key].popleft())
+            if not queues[key]:
+                del queues[key]
+    return ordered
+
+
 def _offers_by_source_in_turn(offers: dict[int, dict[str, Any]]) -> list[tuple[int, dict]]:
     """Offers in id order within each shop, taking shops in turn.
 
     Offer ids follow collection order, so without this a ``--limit`` over every shop would
     spend the whole budget on the shop collected first.
     """
-    queues: dict[str, list[tuple[int, dict]]] = {}
-    for offer_id, offer in sorted(offers.items()):
-        queues.setdefault(offer["source_key"], []).append((offer_id, offer))
-    ordered: list[tuple[int, dict]] = []
-    while queues:
-        for key in list(queues):
-            ordered.append(queues[key].pop(0))
-            if not queues[key]:
-                del queues[key]
-    return ordered
+    return in_turn(sorted(offers.items()), lambda pair: pair[1]["source_key"])
 
 
 def _interleave(planned: list[tuple]) -> list[tuple]:
     """Round-robin across image hosts so one host's spacing never idles the others."""
-    queues: dict[str, list[tuple]] = {}
-    for item in planned:
-        queues.setdefault((urlsplit(item[1]).hostname or "").lower(), []).append(item)
-    ordered: list[tuple] = []
-    while queues:
-        for host in list(queues):
-            ordered.append(queues[host].pop(0))
-            if not queues[host]:
-                del queues[host]
-    return ordered
+    return in_turn(planned, lambda item: (urlsplit(item[1]).hostname or "").lower())
 
 
 def _load_cache(root: Path) -> dict[str, dict[str, Any]]:
@@ -287,6 +297,91 @@ def _opted_out(headers: Mapping[str, str]) -> str | None:
     if tags & {"noai", "noimageai"}:
         return "image opts out of AI use (X-Robots-Tag)"
     return None
+
+
+class PhotoRefused(Exception):
+    """A photo that was not downloaded; ``str()`` is the reason reports count.
+
+    ``opted_out`` marks the shop's own opt-outs (robots.txt, TDMRep, opt-out headers),
+    as opposed to failures such as an HTTP error.
+    """
+
+    def __init__(self, reason: str, *, opted_out: bool = False):
+        super().__init__(reason)
+        self.opted_out = opted_out
+
+
+class PolitePhotoFetcher:
+    """The checks every photo download makes, shared by fetch-images and index-photos.
+
+    Before a download: the image host's robots.txt (read once, with its Crawl-delay)
+    and TDMRep on both the image host and the shop's own site. The download itself is
+    spaced per host (``Throttle``), may be conditional (ETag / Last-Modified), and is
+    refused if the response opts out of mining (``tdm-reservation: 1`` or an
+    ``X-Robots-Tag`` with ``noai``/``noimageai``) or exceeds 5 MB.
+    """
+
+    def __init__(
+        self,
+        fetch: Fetch = http_get,
+        delay: float = 2.0,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.throttle = Throttle(fetch, delay, sleep, clock)
+        self.robots = RobotsRules(self.throttle, self.throttle)
+        self.tdm = TdmRules(self.throttle)
+        self.photo_requests = 0
+
+    @property
+    def requests(self) -> int:
+        """Every request so far: robots.txt, TDMRep files and photos."""
+        return self.throttle.requests
+
+    @property
+    def crawl_delays(self) -> dict[str, float]:
+        return self.throttle.crawl_delays
+
+    def wait_for(self, url: str) -> float:
+        return self.throttle.wait_for(url)
+
+    def refusal(self, source_key: str, url: str) -> str | None:
+        """Why the shop's published rules forbid fetching this photo, or None."""
+        if not self.robots.allowed(url):
+            return "disallowed or unreadable robots.txt"
+        # The shop's own site may reserve mining for everything it publishes.
+        site = f"https://www.{SOURCES[source_key].host}/"
+        reservations = [self.tdm.reserved(url), self.tdm.reserved(site)]
+        if True in reservations:
+            return "text-and-data-mining reserved (TDMRep)"
+        if None in reservations:
+            return "unreadable TDMRep rules"
+        return None
+
+    def download(self, url: str, validators: Mapping[str, Any] | None = None) -> Fetched | None:
+        """The photo's bytes and headers, or None for 304 Not Modified.
+
+        ``validators`` holds a cached ``etag`` and ``last_modified``; they are sent as
+        ``If-None-Match`` / ``If-Modified-Since``. Raises :class:`PhotoRefused`.
+        """
+        conditional = {}
+        if validators and validators.get("etag"):
+            conditional["If-None-Match"] = validators["etag"]
+        if validators and validators.get("last_modified"):
+            conditional["If-Modified-Since"] = validators["last_modified"]
+        self.photo_requests += 1
+        try:
+            data, headers = self.throttle(url, conditional or None)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304 and conditional:
+                return None
+            raise PhotoRefused(f"HTTP {exc.code}") from None
+        except (OSError, ValueError) as exc:
+            raise PhotoRefused(str(exc) or type(exc).__name__) from None
+        opted_out = _opted_out(headers)
+        if opted_out:
+            raise PhotoRefused(opted_out, opted_out=True)
+        return data, headers
 
 
 def fetch_images(
@@ -377,9 +472,7 @@ def fetch_images(
         selected += eligible
     if len(entries) + len(planned) > MAX_ENTRIES:
         raise ValueError(f"manifest would exceed {MAX_ENTRIES} images; use a smaller limit")
-    throttle = Throttle(fetch, delay, sleep, clock)
-    robots = RobotsRules(throttle, throttle)
-    tdm = TdmRules(throttle)
+    fetcher = PolitePhotoFetcher(fetch, delay, sleep, clock)
     for offer, url, revalidate in _interleave(planned):
         stem = f"{offer['id']}-{hashlib.sha256(url.encode()).hexdigest()[:16]}"
         folder = root / offer["source_key"]
@@ -387,41 +480,22 @@ def fetch_images(
         if existing is not None and not revalidate:
             counts["reused"] += 1
         else:
-            # The shop's own site may reserve mining for everything it publishes.
-            site = f"https://www.{SOURCES[offer['source_key']].host}/"
-            if not robots.allowed(url):
-                failures["disallowed or unreadable robots.txt"] += 1
-                continue
-            reservations = [tdm.reserved(url), tdm.reserved(site)]
-            if True in reservations:
-                failures["text-and-data-mining reserved (TDMRep)"] += 1
-                continue
-            if None in reservations:
-                failures["unreadable TDMRep rules"] += 1
+            refusal = fetcher.refusal(offer["source_key"], url)
+            if refusal:
+                failures[refusal] += 1
                 continue
             known = cache.get(url) or {}
-            conditional = {}
-            if existing is not None and known.get("etag"):
-                conditional["If-None-Match"] = known["etag"]
-            if existing is not None and known.get("last_modified"):
-                conditional["If-Modified-Since"] = known["last_modified"]
             try:
-                data, headers = throttle(url, conditional or None)
-                opted_out = _opted_out(headers)
-                if opted_out:
-                    failures[opted_out] += 1
-                    continue
-                extension = _image_extension(data)
-            except urllib.error.HTTPError as exc:
-                if exc.code == 304 and existing is not None:
-                    counts["unchanged"] += 1
-                    cache[url] = {**known, "fetched_at": now.isoformat()}
-                else:
-                    failures[f"HTTP {exc.code}"] += 1
-                    continue
-            except (OSError, ValueError) as exc:
+                fetched = fetcher.download(url, known if existing is not None else None)
+                if fetched is not None:
+                    data, headers = fetched
+                    extension = _image_extension(data)
+            except (PhotoRefused, ValueError) as exc:
                 failures[str(exc) or type(exc).__name__] += 1
                 continue
+            if fetched is None:
+                counts["unchanged"] += 1
+                cache[url] = {**known, "fetched_at": now.isoformat()}
             else:
                 digest = hashlib.sha256(data).hexdigest()
                 if existing is not None and known.get("sha256") == digest:
@@ -463,8 +537,8 @@ def fetch_images(
         "unchanged_on_revalidation": counts["unchanged"],
         "deduplicated": counts["deduplicated"],
         "skipped_not_eligible": dict(skipped),
-        "requests": throttle.requests,
-        "crawl_delays": throttle.crawl_delays,
+        "requests": fetcher.requests,
+        "crawl_delays": fetcher.crawl_delays,
         "failures": dict(failures),
         "manifest_path": str(manifest_path),
         "manifest_entries": len(manifest),
