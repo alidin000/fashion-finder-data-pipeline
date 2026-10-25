@@ -12,6 +12,7 @@ from functools import lru_cache
 
 from .hungarian import (
     COLOURS,
+    ENGLISH_GENDERS,
     GARMENTS,
     MATERIALS,
     PATTERNS,
@@ -97,6 +98,8 @@ FIELD_WEIGHTS = {
     "description": 0.5,
 }
 _WORD = re.compile(r"\w+")
+# English possessive in a query ("women's coat"); left alone, the "s" would become a word.
+_POSSESSIVE = re.compile(r"(?<=\w)['’]s\b")
 
 # An option is (text, whole): `whole` options must equal a word (English plurals
 # allowed); the others may also start or end a word, which covers Hungarian
@@ -123,9 +126,17 @@ def _hungarian_stems(word: str) -> tuple[str, ...]:
 
 
 def query_terms(query: str | None) -> list[Term]:
-    """Return, for each query word, the options that can satisfy it."""
+    """Return, for each query word, the options that can satisfy it.
+
+    Who an item is for ("női", "men's") is never required: offers carry no gender field and
+    most shop titles leave it out, so "női kabát" would otherwise match nothing. Look search
+    still reads it as a ranking hint.
+    """
     terms = []
-    for word in _words(query or ""):
+    for word in _words(_POSSESSIVE.sub("", query or "")):
+        lemma = lemma_of(word)
+        if word in ENGLISH_GENDERS or (lemma and SENSES[lemma].kind == "gender"):
+            continue
         # Short words such as "red" or "bag" must be whole words.
         options: set[Option] = {(word, len(word) < 4)}
         for stem in (word, word.removesuffix("es"), word.removesuffix("s")):

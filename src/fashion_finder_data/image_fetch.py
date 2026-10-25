@@ -234,6 +234,24 @@ def _kept_entries(
     return kept
 
 
+def _offers_by_source_in_turn(offers: dict[int, dict[str, Any]]) -> list[tuple[int, dict]]:
+    """Offers in id order within each shop, taking shops in turn.
+
+    Offer ids follow collection order, so without this a ``--limit`` over every shop would
+    spend the whole budget on the shop collected first.
+    """
+    queues: dict[str, list[tuple[int, dict]]] = {}
+    for offer_id, offer in sorted(offers.items()):
+        queues.setdefault(offer["source_key"], []).append((offer_id, offer))
+    ordered: list[tuple[int, dict]] = []
+    while queues:
+        for key in list(queues):
+            ordered.append(queues[key].pop(0))
+            if not queues[key]:
+                del queues[key]
+    return ordered
+
+
 def _interleave(planned: list[tuple]) -> list[tuple]:
     """Round-robin across image hosts so one host's spacing never idles the others."""
     queues: dict[str, list[tuple]] = {}
@@ -338,7 +356,7 @@ def fetch_images(
     skipped: Counter[str] = Counter()
     planned: list[tuple[dict[str, Any], str, bool]] = []
     selected = 0  # offers with at least one eligible photo
-    for offer_id, offer in sorted(offers.items()):
+    for offer_id, offer in _offers_by_source_in_turn(offers):
         if source is not None and offer["source_key"] != source:
             continue
         if selected >= limit:

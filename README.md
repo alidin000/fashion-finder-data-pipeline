@@ -1,17 +1,20 @@
 # Fashion Finder
 
 Fashion Finder is a local-first clothing discovery app for Hungarian shops. It
-combines a product collection pipeline, a Django catalogue API, and a responsive
-Next.js shopper interface. The first usable flow is **text and filter search**
-over offers that a source policy permits the app to publish.
+combines a polite product collector, a Django catalogue API, and a responsive
+Next.js shopper page with three ways to search: **words and filters**, **match by
+look** (a description, in Hungarian or English, ranked against product photos),
+and **photo search** (upload a photo, find similar items).
 
 The repository is a working **local prototype**, not a public shopping service.
-The default source policy publishes no offers. Photo upload has a real preview.
-The isolated demo compares five CC0 images by coarse colour and layout. An
-[offline image-index experiment](docs/local-image-index.md) can use locally
-supplied, policy-permitted feed photos with either the built-in descriptor or
-an optional pinned pretrained ViT encoder. Real retailer photo search still
-needs source rights and real-user relevance evaluation.
+The default source policy publishes no offers: what a shop's products may show is
+an owner decision recorded in `data/source-policies.json`. On 25 October 2026 a
+local run collected 5,000 current offers from five Hungarian shops and indexed
+1,500 of their photos for photo and look search; see
+[run it on real products](#run-it-on-real-products-local-evaluation). Without
+scraped data, the [practice catalogue](docs/practice-catalogue.md) loads about
+3,600 licence-safe public-dataset products to exercise every search. The
+[public Render demo](render.yaml) shows only a small synthetic catalogue.
 
 ## What it looks like
 
@@ -29,16 +32,22 @@ coverage or grant permission to use retailer images.
 
 ## What a shopper can do
 
-1. Search by text, category, colour, size, shop, and maximum HUF price. For
-   example, `black jacket under 15000 Ft` fills the price limit automatically.
-2. Sort current eligible offers by price or last check, then load more results.
-3. Review each offer's price, freshness, source, image availability, and stock
-   state. Unknown stock is shown as unconfirmed. Similarity never implies an
-   identical item: unverified results are labeled **Style inspiration**.
-4. Open the offer on the Hungarian retailer website to confirm final details.
-5. Select a JPEG, PNG, or WebP photo and see a local preview. In the isolated
-   demo, compare it with five CC0 sample images. The regular app reports photo
-   matching as unavailable until an approved image catalogue exists.
+1. Search by words, category, colour, size, shop, and maximum HUF price, in
+   Hungarian or English, with or without accents. `fekete kabát 30000 Ft alatt`
+   fills the price limit; who an item is for (`női`, `men's`) ranks but never
+   filters, because offers carry no gender field.
+2. Tick **Match by look** to rank product photos by the description itself. The
+   page shows how the query was read, for example "Searching for: black women's
+   coat (from 'fekete női kabát')", plus price and size chips.
+3. Upload a photo. The app focuses on the main garment automatically and draws
+   the box it used, names what it saw ("Jacket · black"), offers other garments
+   found in the photo, and lets you crop by hand or use the whole photo. Colour
+   variants of one product fold into a "+N colours" badge.
+4. Sort by price or last check and load more results. Each card shows the shop,
+   HUF price, when the price was last checked (with a warning after 18 hours),
+   and the stock claim. Similarity never implies an identical item: visual
+   results are labeled **Style inspiration**.
+5. Open the offer on the Hungarian retailer website to confirm final details.
 
 No account, checkout, delivery estimate, stock guarantee, or price alert is
 implemented. Search results come from stored catalogue data; a shopper request
@@ -48,19 +57,27 @@ never starts a retailer crawl.
 
 ```mermaid
 flowchart LR
-  A[Source feed or bounded collector] --> B[Raw JSONL archive]
+  A[collect: discovery] --> B[Raw JSONL archive]
+  R[refresh: due offers] --> B
+  F[Partner feed CSV/XML] --> B
   B --> C[Normalize and validate]
-  C --> D[(SQLite offers, prices, runs)]
+  C --> D[(SQLite offers, prices, runs, refresh queue)]
+  D --> I[fetch-images, index-images, index-product-text]
+  I --> X[(Photo index and product-text index)]
   D --> E[Django /api/v1]
+  X --> E
   P[Source policy and freshness rules] --> E
-  E --> F[Next.js shopper page]
-  W[Hourly feed worker] --> A
+  E --> W[Next.js shopper page]
+  G[Scheduled GitHub Actions refresh] -->|token-protected ingest API| E
 ```
 
-- **Collection:** Scrapy can run small, robots-aware retailer checks. An
-  authorized CSV feed can instead enter through `import-feed`. The scheduled
-  worker watches timestamped CSV files for six configured source keys and
-  imports changed files outside shopper requests.
+- **Collection:** `collect` discovers products on the shops marked `reviewed` in
+  `src/fashion_finder_data/source_definitions.toml`; `refresh` re-checks known
+  offers when they fall due, without crawling the whole site. Both honour
+  robots.txt (including Crawl-delay), text-and-data-mining opt-outs and per-host
+  pacing, send an honest `FashionFinderBot` User-Agent, and stop on 401/403 or a
+  CAPTCHA instead of working around it. Partner feeds enter through `import-feed`.
+  The [scraper guide](docs/scraper.md) covers sources, scheduling and reports.
 - **Storage:** The pipeline preserves raw JSONL, normalizes records, deduplicates
   by source product ID or URL, and records price changes and run errors in
   SQLite. Django migrations upgrade an existing local catalogue.
@@ -81,15 +98,23 @@ flowchart LR
 | `GET /api/v1/health` | Service status, latest catalogue timestamp, photo capability, analytics setting, and local demo mode. |
 | `GET /api/v1/search` | Eligible offers with text, filters, sort, limit, and cursor. |
 | `GET /api/v1/offers/{id}` | One current, permitted offer or 404. |
-| `POST /api/v1/search/image` | Validates an uploaded image; matches the five demo samples or an explicitly enabled local product-image index; otherwise returns 503. |
+| `GET /api/v1/search/look` | Text-to-photo search; returns `interpreted_query` and `interpretation` (language, translation, colour, category, size, price limits). |
+| `POST /api/v1/search/image` | Photo search over an explicitly enabled product-image index (or the five demo samples); returns what it understood in `query`. Uploads are limited to 5 MB and 2048×2048 px; the page re-encodes photos to 1024 px first. |
 | `POST /api/v1/events` | Records coarse daily metrics only when analytics is enabled. |
+| `GET /api/v1/ingest/due`, `GET /api/v1/ingest/known`, `POST /api/v1/ingest/offers` | Token-only API for a refresh runner (503 unless `FASHION_FINDER_INGEST_TOKEN` is set); never publishes by itself and refuses demo and practice rows. |
 
 ### Where the code lives
 
 | Path | Responsibility |
 | --- | --- |
-| `web/app/` | Shopper page, responsive styling, and local photo preview. |
-| `src/fashion_finder_data/collectors.py`, `feed.py`, `refresh.py` | Bounded collection, CSV import, and scheduled feed refresh. |
+| `web/app/`, `web/lib/` | Shopper page, photo crop and upload, look-search display. |
+| `src/fashion_finder_data/collectors.py`, `discovery.py`, `structured_data.py`, `politeness.py` | Discovery crawls, schema.org and embedded-JSON extraction, robots and pacing. |
+| `src/fashion_finder_data/source_definitions.toml`, `sources.py` | Every shop as validated configuration (hosts, start pages, sitemaps, status). |
+| `src/fashion_finder_data/scheduler.py`, `runner.py`, `api/ingest.py` | Refresh queue, backoff, removal rules, and the API-mode runner. |
+| `src/fashion_finder_data/image_fetch.py`, `image_index.py`, `query_understanding.py` | Photo download, photo index, garment focus and zero-shot reading. |
+| `src/fashion_finder_data/text_match.py`, `hungarian.py`, `look_query.py`, `look_search.py`, `product_text.py` | Hungarian word handling, query reading, and look-search ranking. |
+| `src/fashion_finder_data/practice/` | Licence-safe practice catalogue and the search benchmark. |
+| `src/fashion_finder_data/feed.py`, `refresh.py` | Partner feed import and the scheduled feed worker. |
 | `src/fashion_finder_data/schema.py`, `pipeline.py`, `storage.py` | Validation, normalization, raw archive, and SQLite writes. |
 | `src/fashion_finder_data/public_catalogue.py`, `api/` | Policy-aware search and Django HTTP routes. |
 | `src/fashion_finder_data/catalogue/` | Django models, migrations, and read-only staff admin. |
@@ -115,7 +140,8 @@ Open **http://localhost:3000**. The API listens on
 if they differ from 1000. Keep `.env` and the source policy private.
 
 The example policy is deliberately **pending**, so a fresh install shows an
-empty catalogue. Do not mark a shop approved merely to fill the UI. Follow the
+empty catalogue. Do not mark a shop approved merely to fill the UI; approving
+for local evaluation is a separate, recorded owner decision (next section). Follow the
 [local Docker runbook](docs/local-docker-runbook.md) to import a permitted feed,
 inspect worker logs, back up SQLite, and check the app. The
 [local Python/Node setup](docs/app-local-setup.md) covers development without
@@ -126,13 +152,98 @@ and open `http://127.0.0.1:3300`. The [demo guide](docs/local-demo.md) explains
 its separate database, sample labels, and limits. Demo products never count
 toward the real-source release gates.
 
+## Run it on real products (local evaluation)
+
+These are the steps of the 25 October 2026 run, from the repository root in Bash
+or WSL. Times are what that run took on a laptop.
+
+```bash
+python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev,image-model]'
+.venv/bin/fashion-finder --data-dir data migrate
+
+# 1. Collect (about 7 minutes: 137 requests, at least 10 s apart per shop)
+.venv/bin/fashion-finder --data-dir data collect all --all-categories \
+  --limit 1000 --max-requests 40 --time-budget-minutes 30
+```
+
+**2. Decide what may be shown.** Copy `config/source-policies.example.json` to
+`data/source-policies.json`. For each shop you choose to show, set
+`approval_status` to `approved`, the three `allow_*` flags to `true`, and an
+`evidence_ref` that records the decision honestly, for example `"local evaluation
+only: owner decision 2026-10-25; not for public deployment"`. Collecting data is
+not permission to publish it: never deploy a policy approved this way. A public
+deployment needs real permission or an affiliate feed per shop.
+
+```bash
+# 3. Photos: one per offer, shops taken in turn. Most image hosts ask for
+#    10 s between requests, so 1,500 photos took about 50 minutes.
+.venv/bin/fashion-finder --data-dir data fetch-images \
+  --policy data/source-policies.json --limit 1500 --per-offer 1
+
+# 4. Models: the pinned INT8 Marqo-FashionSigLIP files (links and SHA-256 values
+#    in docs/local-image-index.md) saved as:
+#    data/models/fashion-siglip-vision-int8.onnx, data/models/fashion-siglip-text-int8.onnx,
+#    data/models/fashion-siglip-tokenizer.json
+
+# 5. Indexes (about 9 minutes for 1,500 photos, then about 1 minute)
+M=data/models
+.venv/bin/fashion-finder --data-dir data index-images data/images/manifest.json \
+  --policy data/source-policies.json --model-path $M/fashion-siglip-vision-int8.onnx
+.venv/bin/fashion-finder --data-dir data index-product-text \
+  --policy data/source-policies.json --model-path $M/fashion-siglip-vision-int8.onnx \
+  --text-model-path $M/fashion-siglip-text-int8.onnx \
+  --tokenizer-path $M/fashion-siglip-tokenizer.json
+
+# 6. API on 127.0.0.1:8000
+FASHION_FINDER_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))') \
+FASHION_FINDER_DB=$PWD/data/fashion_finder.sqlite \
+FASHION_FINDER_SOURCE_POLICIES=$PWD/data/source-policies.json \
+FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT=1 \
+FASHION_FINDER_IMAGE_MODEL_PATH=$PWD/$M/fashion-siglip-vision-int8.onnx \
+FASHION_FINDER_TEXT_MODEL_PATH=$PWD/$M/fashion-siglip-text-int8.onnx \
+FASHION_FINDER_TOKENIZER_PATH=$PWD/$M/fashion-siglip-tokenizer.json \
+.venv/bin/python manage.py runserver 127.0.0.1:8000
+
+# 7. Shopper page on http://localhost:3000 (second terminal, Node 22 or newer)
+cd web && npm ci
+FASHION_FINDER_API_INTERNAL_URL=http://127.0.0.1:8000 npx next dev -p 3000 -H 127.0.0.1
+```
+
+`GET /api/v1/health` should report `"image_search": "available"` and
+`"text_to_image": "available"`. Next.js 16.4.0 may stop once on the first `next dev`
+or `next build` to print a security notice; run the command again. `npm audit`
+reports critical advisories fixed in 16.4.3, so upgrade before any public
+deployment. To keep the data fresh, run `fashion-finder --data-dir data refresh`
+(see the [scraper guide](docs/scraper.md)); rerun `fetch-images` and both index
+commands afterwards so new offers get photos.
+
+## Practice catalogue (no scraping)
+
+`fashion-finder --data-dir <empty dir> load-practice-catalogue <practice dir>`
+loads about 3,600 public-dataset products (ABO, CC BY 4.0; GLAMI-1M, Apache-2.0)
+into their own data directory, never next to real data, so every search can be
+tried and measured before retailers are approved. Building the practice folder,
+loading it and running the page are described in the
+[practice catalogue guide](docs/practice-catalogue.md); measured results for
+every search option are in [benchmark results](docs/benchmark-results.md).
+
 ## Data coverage and release state
 
-Reserved Hungary produced 13 bounded live sample offers on 12 October 2026,
-including 10 checked against product pages. That is extraction evidence, not
-an approved production catalogue. Zara and Pull&Bear did not yield usable live
-product data in the documented checks; H&M returned HTTP 403. ABOUT YOU and
-Answear Hungary advertise affiliate feeds, but they are [candidates](docs/hungarian-source-candidates.md):
+**Local run, 25 October 2026.** `collect all --all-categories --limit 1000`
+stored 1,000 current offers from each reviewed shop (Reserved, Sinsay, Mohito,
+House, Cropp) with no rejected records: every offer has a HUF price, photo URL,
+colour and sizes. Categories covered sweaters, tops, jeans, trousers, jackets,
+coats and dresses; 9 % had no mapped category, and the curated lists do not yet
+include shirts, skirts, shoes, bags or accessories. Cropp's women's shorts
+category answered 404 and was removed from the configuration. The policies for
+these shops remain **pending** in the repository:
+the local run was approved for local evaluation only.
+
+Earlier checks: Zara and Pull&Bear did not yield usable live product data, and
+H&M returned HTTP 403. Most large Hungarian shops block or challenge crawlers,
+need JavaScript, or opt out of AI crawling; the
+[candidate list](docs/hungarian-source-candidates.md) records each one and why.
+ABOUT YOU and Answear advertise affiliate feeds, the better route for them:
 publisher access, feed samples, and image-use terms are still needed.
 
 A private beta needs two approved sources with at least 100 current offers in
@@ -148,11 +259,19 @@ Private task inputs stay outside Git; the report excludes queries and photos.
 
 ## Collection tools and source status
 
-- **Scrapy:** bounded public-page collection with robots checks and conservative
-  request pacing. The configured adapters are Zara, H&M, Reserved, and
-  Pull&Bear. Only the small Reserved sample is documented as successful.
-- **Playwright:** optional Chromium rendering and diagnostics for pages that
-  need JavaScript. It does not guarantee access to a blocked storefront.
+- **Scrapy:** discovery (`collect`) and refresh (`refresh`) with RFC 9309 robots
+  handling, Crawl-delay, per-host pacing and stops on 401/403 or a CAPTCHA. Five
+  LPP shops (Reserved, Sinsay, Mohito, House, Cropp) are `reviewed` and work; a
+  shop that publishes schema.org product data can be added as configuration.
+  `benchmark-extraction` classifies a shop's extraction method and timing.
+- **Scheduled refresh:** `.github/workflows/fashion-finder-refresh.yml` runs at
+  08:17 and 20:17 Budapest time and posts results to the token-protected ingest
+  API. It skips until the `FASHION_FINDER_API_URL` and `FASHION_FINDER_API_TOKEN`
+  secrets exist and the API has a persistent database; the free Render demo's
+  database is temporary. The same command runs as a Render cron job or on a
+  self-hosted runner ([scraper guide](docs/scraper.md)).
+- **Playwright:** optional Chromium rendering, used only for shops marked as
+  needing JavaScript. It does not guarantee access to a blocked storefront.
 - **Crawlee:** compared with Scrapy on a local fixture; it is not required at
   runtime.
 - **Feeds:** local CSV imports support all six source keys. ABOUT YOU and
@@ -189,7 +308,8 @@ for the full contracts and delivery sequence.
 - Pydantic for schema validation
 - Django ORM and migrations with SQLite for local persistence, API, and catalogue review
 - Next.js and TypeScript for the shopper page
-- Optional ONNX Runtime and a pinned local ViT encoder for visual evaluation
+- Optional ONNX Runtime with pinned local Marqo-FashionSigLIP vision and text models
+  (INT8 by default), an optional pinned opus-mt-hu-en translator, and a ViT baseline
 - Docker Compose, Gunicorn, and WhiteNoise for local deployment
 - JSONL for raw snapshots and portable exports
 - Pytest, Ruff, ESLint, and TypeScript checks

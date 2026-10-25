@@ -183,7 +183,8 @@ category_urls = [
   "https://www.cropp.com/hu/hu/noi/ruhazat/ruhak",
   "https://www.cropp.com/hu/hu/noi/ruhazat/ingek",
   "https://www.cropp.com/hu/hu/noi/ruhazat/szoknyak",
-  "https://www.cropp.com/hu/hu/noi/ruhazat/sortok",
+  # noi/ruhazat/sortok answered 404 on 2026-10-25 (the other 17 URLs here answered 200);
+  # add the current women's shorts category back once it is found on the site.
   "https://www.cropp.com/hu/hu/ferfi/ruhazat/dzsekik-kabatok",
   "https://www.cropp.com/hu/hu/ferfi/ruhazat/jogging-topok",
   "https://www.cropp.com/hu/hu/ferfi/ruhazat/farmerek",

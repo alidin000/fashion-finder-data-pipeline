@@ -202,6 +202,49 @@ def test_fetch_skips_sources_without_image_permission(tmp_path) -> None:
     assert web.calls == []
 
 
+def test_a_limit_over_every_shop_takes_shops_in_turn(tmp_path) -> None:
+    database = open_database(tmp_path / "fashion_finder.sqlite")
+    # Reserved is collected first, so its offers hold the lowest ids.
+    for sku in ("R1", "R2", "R3"):
+        add_offer(database, sku, [f"https://static.reserved.com/media/{sku}.jpg"])
+    for sku in ("S1", "S2"):
+        url = f"https://www.sinsay.com/hu/hu/dzseki-{sku}"
+        upsert_offer(
+            database,
+            RetailerOffer(
+                source_key="sinsay",
+                source_url=url,
+                canonical_url=url,
+                source_product_id=sku,
+                title=f"Dzseki {sku}",
+                price_amount=Decimal(9995),
+                currency="HUF",
+                image_urls=[f"https://static.sinsay.com/media/{sku}.jpg"],
+                source_fetched_at=utc_now(),
+            ),
+        )
+    policies = {
+        **POLICIES,
+        ("sinsay", "HU"): POLICIES[("reserved", "HU")].model_copy(update={"source_key": "sinsay"}),
+    }
+    # Distinct bytes per shop: identical photos would be stored once and counted once.
+    web = FakeWeb(
+        demo_image_bytes("demo-003"),
+        headers={"https://static.sinsay.com/media/S1.jpg": {"body": demo_image_bytes("demo-008")}},
+    )
+
+    report = fetch_images(
+        database, tmp_path / "images", policies, limit=2, fetch=web, sleep=lambda _: 0
+    )
+
+    assert report["downloaded"] == 2
+    photos = [call for call in web.calls if call.endswith(".jpg")]
+    assert sorted(photos) == [
+        "https://static.reserved.com/media/R1.jpg",
+        "https://static.sinsay.com/media/S1.jpg",
+    ]
+
+
 def test_fetch_records_bad_responses_without_writing_files(tmp_path) -> None:
     database = open_database(tmp_path / "fashion_finder.sqlite")
     add_offer(

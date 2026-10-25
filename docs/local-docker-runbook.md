@@ -85,8 +85,11 @@ observed result. A synthetic local offer does not satisfy that live smoke test.
 For the optional pretrained photo-search experiment, follow the pinned model
 download and checksum instructions in the [image-index guide](local-image-index.md).
 Set `FASHION_FINDER_INSTALL_IMAGE_MODEL=1` and the in-container
-`FASHION_FINDER_IMAGE_MODEL_PATH=/data/models/vit-base-patch32-224-in21k-int8.onnx`
-before rebuilding. The same model path must be used to create the image index.
+`FASHION_FINDER_IMAGE_MODEL_PATH=/data/models/fashion-siglip-vision-int8.onnx`
+(Marqo-FashionSigLIP, the recommended encoder; the ViT file also works) before
+rebuilding. For **Match by look**, also set `FASHION_FINDER_TEXT_MODEL_PATH` and
+`FASHION_FINDER_TOKENIZER_PATH` to the matching text model and tokenizer. The same
+model path must be used to create the image index.
 Keep the experiment flag at `0` until the index, source policy, and task labels
 are ready.
 

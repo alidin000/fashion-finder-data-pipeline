@@ -1,5 +1,33 @@
 # Application implementation status
 
+## Update, 25 October 2026
+
+- **Search:** photo search focuses on the garment automatically, reads category and
+  colour, offers other garments in the photo and folds colour variants. Look search
+  reads Hungarian (476-entry fashion dictionary with suffix and compound handling,
+  price and size phrases) and blends photo and product-text similarity. Measured on
+  the practice catalogue: Hungarian phrase MRR@10 0.876 → 0.958; photo → category
+  Hit@5 0.937 → 0.953; garment inside a street photo Hit@1 0.35 → 0.60 (see
+  [benchmark results](benchmark-results.md)).
+- **Scraper:** discovery and refresh are separate; a due-queue scheduler (migration
+  0004) backs off on failures and needs two 404s six hours apart to remove an offer;
+  robots, Crawl-delay and opt-outs are honoured; a token-protected ingest API and a
+  scheduled GitHub Actions refresh exist (the workflow skips until its secrets and a
+  persistent API are set). See the [scraper guide](scraper.md).
+- **Practice catalogue:** about 3,600 licence-safe public-dataset products, loaded only
+  into their own data directory ([guide](practice-catalogue.md)).
+- **Local real-data run:** 5,000 current offers from Reserved, Sinsay, Mohito, House and
+  Cropp (1,000 each, none rejected); 1,500 photos fetched and indexed with the INT8
+  FashionSigLIP model; word, look and photo search verified in the API and the browser.
+  The shops were approved for local evaluation only; the repository's policies stay
+  pending.
+- **Checks:** 294 Python tests, ruff, web typecheck, lint, tests and build pass.
+
+The release state below is unchanged: no source is approved for public use, and the
+30-task shopper evaluation has not been run.
+
+## Status as of 13 October 2026
+
 Updated 13 October 2026. This tracks the [technical application plan](application-implementation-plan.md). It describes the implementation in this revision, not a public release. Check the Git ref before using it as evidence for another branch.
 
 | Work package | Status | Evidence and next action |

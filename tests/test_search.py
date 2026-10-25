@@ -144,6 +144,12 @@ def test_english_and_unaccented_queries_find_hungarian_listings(tmp_path: Path) 
     assert found("red coat") == []
     assert found("denim jacket") == ["DENIM"]
     assert found("jeans") == []  # "farmer" alone also names denim jackets
+    # Who it is for is a hint, not a filter: shop titles rarely say "női" and offers have no
+    # gender field, so these used to return nothing.
+    assert found("női kabát") == ["COAT"]
+    assert found("fekete női kabát") == ["COAT"]
+    assert found("women's coat") == ["COAT"]
+    assert found("női ruha") == ["DRESS"]
 
 
 def test_whole_words_avoid_false_hits_and_hungarian_finds_english(tmp_path: Path) -> None:

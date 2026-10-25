@@ -51,7 +51,7 @@ environment variables below with `$env:NAME = "value"` and run
 
 Copy `config/source-policies.example.json` to a local path outside the repository or under ignored `data/`. Add one entry per source and market. Keep the approval evidence itself private; `evidence_ref` is a pointer to it, not the agreement text. The policy parser rejects duplicate entries and any permissions claimed for a pending or revoked source. An absent policy is a denial.
 
-Set `approval_status` to `approved` only after access, publication, deep-link, attribution, and image rights have been checked. Set `allow_public_listing`, `allow_image_display`, and `allow_image_processing` separately. `freshness_hours` controls when an offer disappears from the public API after its last successful check. An HTTP error never refreshes that timestamp or implies out of stock. Edits to the policy file take effect on the next request, including revocation.
+Set `approval_status` to `approved` only after access, publication, deep-link, attribution, and image rights have been checked. The one exception is a recorded owner decision to evaluate collected data on your own machine: say so in `evidence_ref` (for example `"local evaluation only: owner decision 2026-10-25; not for public deployment"`) and never deploy that policy file. See [run it on real products](../README.md#run-it-on-real-products-local-evaluation). Set `allow_public_listing`, `allow_image_display`, and `allow_image_processing` separately. `freshness_hours` controls when an offer disappears from the public API after its last successful check. An HTTP error never refreshes that timestamp or implies out of stock. Edits to the policy file take effect on the next request, including revocation.
 
 ## Run the API and web app
 
@@ -75,7 +75,7 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. The search form calls the API without crawling retailers. A phrase such as `black jacket under 15000 Ft` fills the HUF budget and filters higher-priced offers. Images are displayed only if the active source policy permits display. Photo upload shows a local preview; image matching returns HTTP 503 until approved image sources, a versioned index, and the 30-task evaluation exist. The server validates uploaded type, bytes, and dimensions and does not retain the upload. Put a request-size cap at the reverse proxy before Internet deployment.
+Open `http://localhost:3000`. The search form calls the API without crawling retailers. A phrase such as `black jacket under 15000 Ft` fills the HUF budget and filters higher-priced offers. Images are displayed only if the active source policy permits display. Photo search and **Match by look** need `FASHION_FINDER_IMAGE_SEARCH_EXPERIMENT=1`, a photo index built with the same model, and the model paths (`FASHION_FINDER_IMAGE_MODEL_PATH`, and for look search `FASHION_FINDER_TEXT_MODEL_PATH` and `FASHION_FINDER_TOKENIZER_PATH`); otherwise the photo route returns HTTP 503. The [real-products steps](../README.md#run-it-on-real-products-local-evaluation) and the [image-index guide](local-image-index.md) build them. Public release still needs approved image sources and the 30-task evaluation. The server validates uploaded type, bytes, and dimensions and does not retain the upload. Put a request-size cap at the reverse proxy before Internet deployment.
 
 ## Measure launch-category coverage
 
