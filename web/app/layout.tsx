@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
 
@@ -12,9 +12,21 @@ const geist = Geist({
   fallback: ["ui-sans-serif", "system-ui", "sans-serif"],
 });
 
+const title = "Fashion Finder | Find the look";
+const description = "Search current Hungarian fashion offers by style and budget.";
+
 export const metadata: Metadata = {
-  title: "Fashion Finder | Find the look",
-  description: "Search current Hungarian fashion offers by style and budget.",
+  // The public demo address from the README; share images need an absolute URL.
+  metadataBase: new URL("https://fashion-finder-web.onrender.com"),
+  title,
+  description,
+  applicationName: "Fashion Finder",
+  openGraph: { type: "website", siteName: "Fashion Finder", title, description },
+  twitter: { card: "summary_large_image", title, description },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#f8f6f1",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
