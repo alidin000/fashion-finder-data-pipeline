@@ -2,7 +2,9 @@
 
 /* eslint-disable @next/next/no-img-element -- Do not proxy retailer images; previews are local blob URLs. */
 
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, memo, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, memo, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Icon } from "./_components/icons";
+import { SiteHeader } from "./_components/site-header";
 import { clickEvent, errorEvent, MetricEvent, searchEvent, SearchType } from "../lib/analytics";
 import { Box, boxFromPoints, containedRect, CROP_PRESETS, fitSide, imagePoint, keyBox, overlayRect, pixelBox, Point, Rect, sameGeometry } from "../lib/crop";
 import { Alternative, categoryName, parsePhotoQuery, PhotoQuery, priceFreshness, understandingLabel, variantLabel } from "../lib/photo";
@@ -111,7 +113,8 @@ function matchName(value: Offer["match_type"]) {
 }
 
 // Retailer images get no referrer and fall back to the placeholder when the CDN refuses them or the URL is gone.
-function OfferCard({ item, onOpen, now }: { item: Offer; onOpen: (sourceKey: string) => void; now: Date | null }) {
+// `index` staggers the entrance animation; the CSS caps the delay so long grids never wait.
+function OfferCard({ item, index, onOpen, now }: { item: Offer; index: number; onOpen: (sourceKey: string) => void; now: Date | null }) {
   const [imageFailed, setImageFailed] = useState(false);
   const image = imageFailed ? undefined : item.image_urls[0];
   const variants = variantLabel(item.variant_count ?? 0, item.variant_colours);
@@ -119,24 +122,24 @@ function OfferCard({ item, onOpen, now }: { item: Offer; onOpen: (sourceKey: str
   const sample = SAMPLE_LABELS[item.source_key];
   const stock = item.availability_status === "unknown" ? "not confirmed" : item.availability_status.replace("_", " ");
   return (
-    <article className="offer-card">
+    <article className="offer-card" style={{ "--i": index } as CSSProperties}>
       <div className="offer-image">
-        {image ? <img src={image} alt={item.title} lang="hu" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} /> : <div className="image-placeholder"><span>F/F</span><small>IMAGE NOT AVAILABLE</small></div>}
-        <span className="match-pill">{matchName(item.match_type)}</span>
-        {variants && <span className="variant-pill" title={item.variant_colours?.length ? `Also in: ${item.variant_colours.join(", ")}` : "Similar listings of this product from the same shop"}>{variants}<span className="visually-hidden">{item.variant_colours?.length ? `: also in ${item.variant_colours.join(", ")}` : " similar listings of this product"}</span></span>}
+        {image ? <img src={image} alt={item.title} lang="hu" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} /> : <div className="image-placeholder"><Icon name="coat-hanger" size={32} /><small className="caption-4">Image not available</small></div>}
+        <span className="match-pill caption-4">{matchName(item.match_type)}</span>
+        {variants && <span className="variant-pill caption-4" title={item.variant_colours?.length ? `Also in: ${item.variant_colours.join(", ")}` : "Similar listings of this product from the same shop"}>{variants}<span className="visually-hidden">{item.variant_colours?.length ? `: also in ${item.variant_colours.join(", ")}` : " similar listings of this product"}</span></span>}
       </div>
       <div className="offer-info">
-        <span className="offer-source">{sourceName(item.source_key)}</span>
-        <h3 lang="hu">{item.title}</h3>
+        <span className="offer-source caption-3">{sourceName(item.source_key)}</span>
+        <h3 lang="hu" className="title-3">{item.title}</h3>
         <div className="offer-bottom">
-          <strong>{formatHuf(item.price_amount)}</strong>
-          {sample ? <span className="demo-item-label">{sample}</span> : <a href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen(item.source_key)}>View item<span className="visually-hidden">: <span lang="hu">{item.title}</span> at {sourceName(item.source_key)}</span> <span aria-hidden>↗</span></a>}
+          <strong className="heading-6">{formatHuf(item.price_amount)}</strong>
+          {sample ? <span className="demo-item-label caption-3">{sample}</span> : <a className="offer-link button-sm" href={item.source_url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen(item.source_key)}>View item<span className="visually-hidden">: <span lang="hu">{item.title}</span> at {sourceName(item.source_key)}</span><Icon name="arrow-up-right" size={16} /></a>}
         </div>
-        <p className="offer-meta">
-          {freshness ? <time className={freshness.stale ? "freshness stale" : "freshness"} dateTime={item.last_checked_at} title={`Checked ${checkedDate.format(new Date(item.last_checked_at ?? ""))}`}>{freshness.stale && <span aria-hidden>! </span>}{freshness.text}{freshness.stale && <span className="visually-hidden">; the price may have changed</span>}</time> : null}
+        <p className="offer-meta caption-5">
+          {freshness ? <time className={freshness.stale ? "freshness stale" : "freshness"} dateTime={item.last_checked_at} title={`Checked ${checkedDate.format(new Date(item.last_checked_at ?? ""))}`}>{freshness.stale && <Icon name="warning" size={12} />}{freshness.text}{freshness.stale && <span className="visually-hidden">; the price may have changed</span>}</time> : null}
           {freshness ? " · " : ""}Stock {stock}
         </p>
-        {item.attribution && <p className="offer-meta">{item.attribution}</p>}
+        {item.attribution && <p className="offer-meta caption-5">{item.attribution}</p>}
       </div>
     </article>
   );
@@ -144,11 +147,12 @@ function OfferCard({ item, onOpen, now }: { item: Offer; onOpen: (sourceKey: str
 
 // Memoised so typing in the search form does not re-render every card.
 const OfferGrid = memo(function OfferGrid({ items, onOpen, now }: { items: Offer[]; onOpen: (sourceKey: string) => void; now: Date | null }) {
-  return <div className="offer-grid">{items.map((item) => <OfferCard key={item.id} item={item} onOpen={onOpen} now={now} />)}</div>;
+  return <div className="offer-grid">{items.map((item, index) => <OfferCard key={item.id} item={item} index={index} onOpen={onOpen} now={now} />)}</div>;
 });
 
+// Shaped like an offer card: photo, shop, title and price.
 function LoadingGrid() {
-  return <div className="offer-grid loading-grid" aria-hidden="true">{[0, 1, 2, 3].map((key) => <div className="offer-card skeleton" key={key}><div className="offer-image" /><div className="offer-info"><span /><span /><span /></div></div>)}</div>;
+  return <div className="offer-grid loading-grid" aria-hidden="true">{[0, 1, 2, 3].map((key) => <div className="offer-card skeleton" key={key}><div className="offer-image" /><div className="offer-info"><span className="skeleton-line" /><span className="skeleton-line" /><span className="skeleton-line" /></div></div>)}</div>;
 }
 
 export default function Home() {
@@ -223,6 +227,25 @@ export default function Home() {
     const remeasure = () => setImageRect(keepIfSame(measure(previewImage.current)?.image ?? null));
     window.addEventListener("resize", remeasure);
     return () => window.removeEventListener("resize", remeasure);
+  }, []);
+
+  // Sections below the first screen rise into place once, when they scroll into view. Anything
+  // already on screen at load is left as rendered, so the first paint never waits on this script.
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add("is-revealed");
+        observer.unobserve(entry.target);
+      }
+    }, { rootMargin: "0px 0px -48px 0px" });
+    for (const element of document.querySelectorAll<HTMLElement>("[data-reveal]")) {
+      if (element.classList.contains("is-revealed") || element.getBoundingClientRect().top < window.innerHeight) continue;
+      element.classList.add("reveal-pending");
+      observer.observe(element);
+    }
+    return () => observer.disconnect();
   }, []);
 
   function pointerPoint(event: ReactPointerEvent<HTMLDivElement>): Point | null {
@@ -488,119 +511,123 @@ export default function Home() {
   const announcement = photoMessage ? photoMessage + (photoBusy ? "" : understoodText) : status === "loading" ? "Finding your options…" : status === "error" ? `Search failed. ${error}` : status === "ready" ? (items.length ? `${resultCount}.` : emptyTitle) : "";
 
   return (
-    <main>
-      <div className="site-shell">
-        <p className="visually-hidden" role="status" aria-live="polite">{announcement}</p>
-        <header className="site-header">
-          <div className="brand"><span className="brand-mark">F<span>F</span></span><span>FASHION FINDER</span></div>
-          <span className="market-label">HUNGARY · HUF</span>
-        </header>
-        {demoMode && <div className="demo-banner">LOCAL DEMO · Synthetic products and prices. No retailer links or live stock.</div>}
+    <>
+      <SiteHeader current />
+      <main id="main" tabIndex={-1}>
+        <div className="site-shell">
+          <p className="visually-hidden" role="status" aria-live="polite">{announcement}</p>
+          {demoMode && <div className="demo-banner body-6"><Icon name="info" size={16} /><p><strong className="body-4">LOCAL DEMO</strong> · Synthetic products and prices. No retailer links or live stock.</p></div>}
 
-        <section className="hero" aria-labelledby="hero-title">
-          <div className="hero-copy">
-            <span className="eyebrow">THE LOOK YOU LOVE, WITHIN REACH</span>
-            <h1 id="hero-title">Find the piece.<br /><em>Make it yours.</em></h1>
-            <p>{demoMode ? "Explore synthetic sample items to test search, filters, and budgets locally." : "Explore current fashion offers from approved Hungarian shops. Start with a style, a budget, or a photo."}</p>
-            <a className="text-link" href="#search">Explore the catalogue <span aria-hidden>↗</span></a>
-          </div>
-          <div className="hero-art" aria-hidden="true">
-            <div className="art-orbit orbit-one" />
-            <div className="art-orbit orbit-two" />
-            <div className="art-card art-card-one"><span>STYLE / 01</span><div className="art-silhouette coat" /></div>
-            <div className="art-card art-card-two"><span>FIND YOUR FIT</span><div className="art-silhouette shirt" /></div>
-            <div className="art-note">More style.<br />Less searching.</div>
-          </div>
-        </section>
+          <section className="hero" aria-labelledby="hero-title">
+            <div className="hero-copy">
+              <span className="eyebrow caption-3">The look you love, within reach</span>
+              <h1 id="hero-title" className="hero-title heading-3 md:heading-1">Find the piece.<br />Make it yours.</h1>
+              <p className="hero-lede title-2">{demoMode ? "Explore synthetic sample items to test search, filters, and budgets locally." : "Explore current fashion offers from approved Hungarian shops. Start with a style, a budget, or a photo."}</p>
+              <a className="text-link button-sm" href="#search">Explore the catalogue<Icon name="arrow-down" size={16} /></a>
+            </div>
+            <div className="hero-art" aria-hidden="true">
+              <div className="art-orbit orbit-one" />
+              <div className="art-orbit orbit-two" />
+              <div className="art-card art-card-one"><span className="caption-4">Style / 01</span><div className="art-silhouette coat" /></div>
+              <div className="art-card art-card-two"><span className="caption-4">Find your fit</span><div className="art-silhouette shirt" /></div>
+              <div className="art-note title-2">More style.<br />Less searching.</div>
+            </div>
+          </section>
 
-        <section className="search-section" id="search" aria-labelledby="search-title">
-          <div className="section-heading"><div><span className="eyebrow">DISCOVER</span><h2 id="search-title">Search the catalogue</h2></div><span className="step-label">01 / FIND YOUR STYLE</span></div>
-          <div className="search-layout">
-            <form className="search-panel" onSubmit={submit}>
-              <label className="field-label" htmlFor="query">What are you looking for?</label>
-              <div className="search-row"><input id="query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="e.g. black jacket under 15000 Ft" /><button className="primary-button" type="submit" disabled={busy}>Search <span aria-hidden>→</span></button></div>
-              <p className="field-hint">Tip: type a budget in your search, or set it below.</p>
-              {lookCapability && <label className="look-toggle"><input type="checkbox" checked={matchByLook} onChange={(event) => setMatchByLook(event.target.checked)} /> Match by look: rank product photos by your description</label>}
-              <div className="filter-grid">
-                <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option><option value="jackets">Jackets</option><option value="coats">Coats</option><option value="dresses">Dresses</option><option value="sweaters">Sweaters</option><option value="shirts">Shirts</option><option value="blouses">Blouses</option><option value="tops">Tops</option><option value="trousers">Trousers</option><option value="jeans">Jeans</option><option value="skirts">Skirts</option><option value="shorts">Shorts</option><option value="shoes">Shoes</option><option value="bags">Bags</option><option value="accessories">Accessories</option></select></label>
-                <label>Colour<input value={colour} onChange={(event) => setColour(event.target.value)} placeholder="Any colour, e.g. black or fekete" /></label>
-                <label>Maximum price · Ft<input type="number" min="0" step="1" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="No limit" /></label>
-                <label>Size<input value={size} onChange={(event) => setSize(event.target.value)} placeholder="Any size" /></label>
-                <label>Shop<select value={source} onChange={(event) => setSource(event.target.value)}><option value="">{demoMode ? "All demo items" : "All approved shops"}</option>{demoMode ? <option value="demo">Local demo</option> : <><option value="reserved">Reserved</option><option value="sinsay">Sinsay</option><option value="mohito">Mohito</option><option value="house">House</option><option value="cropp">Cropp</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></>}</select></label>
-                <label>Sort by<select value={sort} onChange={(event) => setSortChoice(event.target.value)}><option value="relevance">Best match</option><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
-              </div>
-            </form>
-            <div className="photo-panel" aria-busy={photoBusy}>
-              <span className="photo-icon" aria-hidden="true">◎</span>
-              <span className="eyebrow">HAVE A PHOTO?</span>
-              <h3>Start with a look.</h3>
-              <p>{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with locally indexed, permitted offers. We focus on the main garment; you can crop it yourself. Visual ranking is experimental." : "Preview your photo here. Visual matching opens when approved product images are available."}</p>
-              <label className="upload-button" htmlFor="photo">{photo ? "Choose another photo" : "Choose a photo"} <span aria-hidden>＋</span></label>
-              <input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} />
-              {preview && (
-                <div className="crop-tools">
-                  <button className="crop-toggle" type="button" aria-pressed={cropMode} onClick={toggleCropMode}>Crop</button>
-                  {cropMode && <><button className="text-button" type="button" onClick={() => chooseCrop(CROP_PRESETS.top)}>Top half</button><button className="text-button" type="button" onClick={() => chooseCrop(CROP_PRESETS.bottom)}>Bottom half</button><button className="text-button" type="button" onClick={() => chooseCrop(CROP_PRESETS.centre)}>Centre</button></>}
-                  {crop && <button className="text-button" type="button" onClick={() => chooseCrop(null)}>Clear crop</button>}
+          <section className="search-section" id="search" aria-labelledby="search-title" data-reveal>
+            <div className="section-heading"><div><span className="eyebrow caption-3">Discover</span><h2 id="search-title" className="heading-5 md:heading-3">Search the catalogue</h2></div><span className="step-label caption-3">01 / Find your style</span></div>
+            <div className="search-layout">
+              <form className="search-panel" onSubmit={submit}>
+                <label className="field-label title-4" htmlFor="query">What are you looking for?</label>
+                <div className="search-row"><input id="query" className="field body-3" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="e.g. black jacket under 15000 Ft" /><button className="btn btn-primary button-md" type="submit" disabled={busy}>Search<Icon name="arrow-right" /></button></div>
+                <p className="field-hint caption-2">Tip: type a budget in your search, or set it below.</p>
+                {lookCapability && <label className="look-toggle body-5"><input type="checkbox" checked={matchByLook} onChange={(event) => setMatchByLook(event.target.checked)} /> Match by look: rank product photos by your description</label>}
+                <div className="filter-grid">
+                  <label className="title-4">Category<select className="field body-3" value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option><option value="jackets">Jackets</option><option value="coats">Coats</option><option value="dresses">Dresses</option><option value="sweaters">Sweaters</option><option value="shirts">Shirts</option><option value="blouses">Blouses</option><option value="tops">Tops</option><option value="trousers">Trousers</option><option value="jeans">Jeans</option><option value="skirts">Skirts</option><option value="shorts">Shorts</option><option value="shoes">Shoes</option><option value="bags">Bags</option><option value="accessories">Accessories</option></select></label>
+                  <label className="title-4">Colour<input className="field body-3" value={colour} onChange={(event) => setColour(event.target.value)} placeholder="Any colour, e.g. black or fekete" /></label>
+                  <label className="title-4">Maximum price · Ft<input className="field body-3" type="number" min="0" step="1" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="No limit" /></label>
+                  <label className="title-4">Size<input className="field body-3" value={size} onChange={(event) => setSize(event.target.value)} placeholder="Any size" /></label>
+                  <label className="title-4">Shop<select className="field body-3" value={source} onChange={(event) => setSource(event.target.value)}><option value="">{demoMode ? "All demo items" : "All approved shops"}</option>{demoMode ? <option value="demo">Local demo</option> : <><option value="reserved">Reserved</option><option value="sinsay">Sinsay</option><option value="mohito">Mohito</option><option value="house">House</option><option value="cropp">Cropp</option><option value="zara">Zara</option><option value="hm">H&amp;M</option><option value="pullandbear">Pull&amp;Bear</option><option value="aboutyou">ABOUT YOU</option><option value="answear">Answear</option></>}</select></label>
+                  <label className="title-4">Sort by<select className="field body-3" value={sort} onChange={(event) => setSortChoice(event.target.value)}><option value="relevance">Best match</option><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option><option value="recent">Recently checked</option></select></label>
                 </div>
-              )}
-              <div className={`photo-preview${preview ? " has-photo" : ""}${cropMode ? " cropping" : ""}${photoBusy ? " scanning" : ""}`} onPointerDown={cropMode ? startCrop : undefined} onPointerMove={cropMode ? moveCrop : undefined} onPointerUp={cropMode ? endCrop : undefined} onPointerCancel={cropMode ? cancelCrop : undefined} onLostPointerCapture={cropMode ? cancelCrop : undefined}>
-                {preview ? <img ref={previewImage} src={preview} alt="Your selected clothing photo" draggable={false} onLoad={() => setImageRect(keepIfSame(measure(previewImage.current)?.image ?? null))} /> : <span>Your preview appears here</span>}
-                {autoOverlay && <div className="auto-box" style={{ left: autoOverlay.left, top: autoOverlay.top, width: autoOverlay.width, height: autoOverlay.height }} aria-hidden="true"><span>Auto focus</span></div>}
-                {highlightOverlay && <div className="alt-box" style={{ left: highlightOverlay.left, top: highlightOverlay.top, width: highlightOverlay.width, height: highlightOverlay.height }} aria-hidden="true" />}
-                {cropOverlay && <div className="crop-box" style={{ left: cropOverlay.left, top: cropOverlay.top, width: cropOverlay.width, height: cropOverlay.height }} tabIndex={cropMode && crop ? 0 : undefined} role={cropMode && crop ? "group" : undefined} aria-label={cropMode ? cropLabel : undefined} aria-describedby={cropMode && crop ? "crop-hint" : undefined} onKeyDown={cropMode ? nudgeCrop : undefined} />}
-              </div>
-              {preview && <p className="photo-hint" id="crop-hint">{cropMode ? "Drag across the garment or pick a preset. Arrow keys move the box; Shift+arrows resize it." : crop ? "Only the boxed area is compared." : autoBox ? "We compared the boxed garment. Use Crop to choose another area." : "We look for the main garment. Use Crop to choose it yourself."}</p>}
-              {photo && <button className="photo-search" type="button" disabled={busy} onClick={() => void searchPhoto()}>{photoBusy ? "Looking…" : "Find similar styles →"}</button>}
-              {photoMessage && <p className="photo-message">{photoMessage}</p>}
-              {sawSomething && !photoBusy && (
-                <div className="understood" role="group" aria-label="What the photo search saw">
-                  <div className="understood-row">
-                    <span className="understood-label">We searched for</span>
-                    {reading ? <span className={`chip${reading.unsure ? " chip-unsure" : ""}`}>{reading.text}{reading.unsure && <span aria-hidden> ?</span>}</span> : <span className="chip chip-unsure">this look</span>}
-                    {photoQuery?.cropSource === "auto" && <button className="text-button" type="button" disabled={busy} onClick={searchWholePhoto}>Use whole photo</button>}
+              </form>
+              <div className="photo-panel" aria-busy={photoBusy}>
+                <span className="photo-icon" aria-hidden="true"><Icon name="camera" size={24} /></span>
+                <span className="eyebrow caption-3">Have a photo?</span>
+                <h3 className="heading-5">Start with a look.</h3>
+                <p className="photo-intro body-6">{demoMode ? "Upload a photo to compare it with five CC0 demo images. Colour and layout guide this prototype search." : photoCapability ? "Compare your photo with locally indexed, permitted offers. We focus on the main garment; you can crop it yourself. Visual ranking is experimental." : "Preview your photo here. Visual matching opens when approved product images are available."}</p>
+                <label className="upload-button btn btn-secondary button-md" htmlFor="photo"><Icon name="upload-simple" />{photo ? "Choose another photo" : "Choose a photo"}</label>
+                <input id="photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => choosePhoto(event.target.files?.[0] ?? null)} />
+                {preview && (
+                  <div className="crop-tools">
+                    <button className="crop-toggle btn btn-secondary btn-sm button-sm" type="button" aria-pressed={cropMode} onClick={toggleCropMode}><Icon name="crop" size={16} />Crop</button>
+                    {cropMode && <><button className="text-button button-sm" type="button" onClick={() => chooseCrop(CROP_PRESETS.top)}>Top half</button><button className="text-button button-sm" type="button" onClick={() => chooseCrop(CROP_PRESETS.bottom)}>Bottom half</button><button className="text-button button-sm" type="button" onClick={() => chooseCrop(CROP_PRESETS.centre)}>Centre</button></>}
+                    {crop && <button className="text-button button-sm" type="button" onClick={() => chooseCrop(null)}>Clear crop</button>}
                   </div>
-                  {reading?.unsure && <p className="understood-hint">Not sure we got it right. Crop the garment to steer the search.</p>}
-                  {photoQuery && photoQuery.alternatives.length > 0 && (
+                )}
+                <div className={`photo-preview${preview ? " has-photo" : ""}${cropMode ? " cropping" : ""}${photoBusy ? " scanning" : ""}`} onPointerDown={cropMode ? startCrop : undefined} onPointerMove={cropMode ? moveCrop : undefined} onPointerUp={cropMode ? endCrop : undefined} onPointerCancel={cropMode ? cancelCrop : undefined} onLostPointerCapture={cropMode ? cancelCrop : undefined}>
+                  {preview ? <img ref={previewImage} src={preview} alt="Your selected clothing photo" draggable={false} onLoad={() => setImageRect(keepIfSame(measure(previewImage.current)?.image ?? null))} /> : <span className="preview-empty caption-5"><Icon name="image" size={24} />Your preview appears here</span>}
+                  {autoOverlay && <div className="auto-box" style={{ left: autoOverlay.left, top: autoOverlay.top, width: autoOverlay.width, height: autoOverlay.height }} aria-hidden="true"><span className="caption-3">Auto focus</span></div>}
+                  {highlightOverlay && <div className="alt-box" style={{ left: highlightOverlay.left, top: highlightOverlay.top, width: highlightOverlay.width, height: highlightOverlay.height }} aria-hidden="true" />}
+                  {cropOverlay && <div className="crop-box" style={{ left: cropOverlay.left, top: cropOverlay.top, width: cropOverlay.width, height: cropOverlay.height }} tabIndex={cropMode && crop ? 0 : undefined} role={cropMode && crop ? "group" : undefined} aria-label={cropMode ? cropLabel : undefined} aria-describedby={cropMode && crop ? "crop-hint" : undefined} onKeyDown={cropMode ? nudgeCrop : undefined} />}
+                </div>
+                {preview && <p className="photo-hint caption-5" id="crop-hint">{cropMode ? "Drag across the garment or pick a preset. Arrow keys move the box; Shift+arrows resize it." : crop ? "Only the boxed area is compared." : autoBox ? "We compared the boxed garment. Use Crop to choose another area." : "We look for the main garment. Use Crop to choose it yourself."}</p>}
+                {photo && <button className="photo-search btn btn-secondary button-md" type="button" disabled={busy} onClick={() => void searchPhoto()}>{photoBusy ? "Looking…" : <>Find similar styles<Icon name="arrow-right" /></>}</button>}
+                {photoMessage && <p className="photo-message body-5">{photoMessage}</p>}
+                {sawSomething && !photoBusy && (
+                  <div className="understood" role="group" aria-label="What the photo search saw">
                     <div className="understood-row">
-                      <span className="understood-label">Also in this photo</span>
-                      {photoQuery.alternatives.map((alternative) => (
-                        <button key={`${alternative.category}-${alternative.crop.x}-${alternative.crop.y}`} className="chip-button" type="button" disabled={busy} onClick={() => searchAlternative(alternative)} onMouseEnter={() => setHighlight(alternative.crop)} onMouseLeave={() => setHighlight(null)} onFocus={() => setHighlight(alternative.crop)} onBlur={() => setHighlight(null)}>
-                          {categoryName(alternative.category)}<span className="visually-hidden">: search for this item in your photo instead</span> <span aria-hidden>→</span>
-                        </button>
-                      ))}
+                      <span className="understood-label caption-3">We searched for</span>
+                      {reading ? <span className={`chip caption-3${reading.unsure ? " chip-unsure" : ""}`}>{reading.text}{reading.unsure && <Icon name="question" size={14} />}</span> : <span className="chip chip-unsure caption-3">this look</span>}
+                      {photoQuery?.cropSource === "auto" && <button className="text-button button-sm" type="button" disabled={busy} onClick={searchWholePhoto}>Use whole photo</button>}
                     </div>
-                  )}
-                </div>
-              )}
+                    {reading?.unsure && <p className="understood-hint caption-5">Not sure we got it right. Crop the garment to steer the search.</p>}
+                    {photoQuery && photoQuery.alternatives.length > 0 && (
+                      <div className="understood-row">
+                        <span className="understood-label caption-3">Also in this photo</span>
+                        {photoQuery.alternatives.map((alternative) => (
+                          <button key={`${alternative.category}-${alternative.crop.x}-${alternative.crop.y}`} className="chip-button button-xsm" type="button" disabled={busy} onClick={() => searchAlternative(alternative)} onMouseEnter={() => setHighlight(alternative.crop)} onMouseLeave={() => setHighlight(null)} onFocus={() => setHighlight(alternative.crop)} onBlur={() => setHighlight(null)}>
+                            {categoryName(alternative.category)}<span className="visually-hidden">: search for this item in your photo instead</span><Icon name="arrow-right" size={14} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section className="results-section" aria-labelledby="results-title" aria-busy={status === "loading"}>
-          <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOUR SEARCH</span><h2 id="results-title">The finds</h2></div><span className="results-count">{status === "ready" ? resultCount : demoMode ? "DEMO CATALOGUE" : "LIVE CATALOGUE"}</span></div>
-          {look && status === "ready" && (
-            <div className="interpreted" role="group" aria-label="How we read your search">
-              <p>Searching for: <strong>{look.searchingFor}</strong>{look.from && <> (from &apos;<span lang="hu">{look.from}</span>&apos;)</>}</p>
-              {(look.chips.length > 0 || look.rankedFor) && (
-                <div className="understood-row">
-                  {look.chips.map((chip) => <span className="chip chip-light" key={chip}>{chip}</span>)}
-                  {look.rankedFor && <span className="ranked-for">Ranked for: {look.rankedFor}</span>}
-                </div>
-              )}
-              {look.notUnderstood && <p className="not-understood">Not understood: <span lang="hu">{look.notUnderstood}</span>. Try other words.</p>}
-            </div>
-          )}
-          {status === "idle" && <div className="empty-state"><span>✦</span><h3>Your next favourite starts here.</h3><p>{demoMode ? "Search synthetic items by style, category, colour, or budget." : "Search by style, category, colour, or budget to see approved offers."}</p></div>}
-          {status === "loading" && items.length === 0 && <><p className="loading-note">{photoBusy ? "Looking at your photo and finding similar styles…" : "Finding your options…"}</p><LoadingGrid /></>}
-          {status === "error" && <div className="empty-state error-state" role="alert"><h3>Search failed</h3><p>{error}</p></div>}
-          {status === "ready" && items.length === 0 && <div className="empty-state"><span>◇</span><h3>{emptyTitle}</h3><p>{shown !== null ? "No permitted offer looks close enough. Try a wider budget, fewer filters, or crop the garment." : demoMode ? "Try a wider budget or another category." : "Try a wider budget or category. Only approved, recently checked offers appear here."}</p></div>}
-          {visibleItems.length > 0 && <OfferGrid items={visibleItems} onOpen={openOffer} now={resultsAt} />}
-          {status === "ready" && nextCursor && <button className="load-more" type="button" disabled={busy} onClick={loadMore}>Load more finds ↓</button>}
-          {status === "ready" && shown !== null && shown < items.length && <button className="load-more" type="button" onClick={() => setShown(items.length)}>Show {items.length - shown} more similar styles ↓</button>}
-        </section>
-        <footer><span>FASHION FINDER</span><p>{demoMode ? "Local demo uses synthetic offers and prices; photo search compares five CC0 examples and cannot verify product identity." : "Prices and availability are checked at the time shown. Final details are on the retailer website."}</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</footer>
-      </div>
-    </main>
+          <section className="results-section" id="results" aria-labelledby="results-title" aria-busy={status === "loading"} data-reveal>
+            <div className="section-heading"><div><span className="eyebrow caption-3">Curated for your search</span><h2 id="results-title" className="heading-5 md:heading-3">The finds</h2></div><span className="results-count caption-4">{status === "ready" ? resultCount : demoMode ? "Demo catalogue" : "Live catalogue"}</span></div>
+            {look && status === "ready" && (
+              <div className="interpreted body-6" role="group" aria-label="How we read your search">
+                <p>Searching for: <strong>{look.searchingFor}</strong>{look.from && <> (from &apos;<span lang="hu">{look.from}</span>&apos;)</>}</p>
+                {(look.chips.length > 0 || look.rankedFor) && (
+                  <div className="understood-row">
+                    {look.chips.map((chip) => <span className="chip chip-light caption-3" key={chip}>{chip}</span>)}
+                    {look.rankedFor && <span className="ranked-for caption-2">Ranked for: {look.rankedFor}</span>}
+                  </div>
+                )}
+                {look.notUnderstood && <p className="not-understood">Not understood: <span lang="hu">{look.notUnderstood}</span>. Try other words.</p>}
+              </div>
+            )}
+            {status === "idle" && <div className="empty-state"><span className="empty-art" aria-hidden="true"><span /><span><Icon name="sparkle" size={24} /></span><span /></span><h3 className="heading-6">Your next favourite starts here.</h3><p className="body-6">{demoMode ? "Search synthetic items by style, category, colour, or budget." : "Search by style, category, colour, or budget to see approved offers."}</p></div>}
+            {status === "loading" && items.length === 0 && <><p className="loading-note body-6">{photoBusy ? "Looking at your photo and finding similar styles…" : "Finding your options…"}</p><LoadingGrid /></>}
+            {status === "error" && <div className="empty-state error-state" role="alert"><span className="empty-icon" aria-hidden="true"><Icon name="warning-circle" size={24} /></span><h3 className="heading-6">Search failed</h3><p className="body-6">{error}</p></div>}
+            {status === "ready" && items.length === 0 && <div className="empty-state"><span className="empty-icon" aria-hidden="true"><Icon name="magnifying-glass" size={24} /></span><h3 className="heading-6">{emptyTitle}</h3><p className="body-6">{shown !== null ? "No permitted offer looks close enough. Try a wider budget, fewer filters, or crop the garment." : demoMode ? "Try a wider budget or another category." : "Try a wider budget or category. Only approved, recently checked offers appear here."}</p></div>}
+            {visibleItems.length > 0 && <OfferGrid items={visibleItems} onOpen={openOffer} now={resultsAt} />}
+            {status === "ready" && nextCursor && <button className="load-more btn btn-secondary button-md" type="button" disabled={busy} onClick={loadMore}>Load more finds<Icon name="arrow-down" /></button>}
+            {status === "ready" && shown !== null && shown < items.length && <button className="load-more btn btn-secondary button-md" type="button" onClick={() => setShown(items.length)}>Show {items.length - shown} more similar styles<Icon name="arrow-down" /></button>}
+          </section>
+        </div>
+      </main>
+      <footer className="site-footer" data-reveal>
+        <div className="site-shell footer-inner">
+          <span className="footer-brand body-4">Fashion Finder</span>
+          <div className="footer-notes caption-2"><p>{demoMode ? "Local demo uses synthetic offers and prices; photo search compares five CC0 examples and cannot verify product identity." : "Prices and availability are checked at the time shown. Final details are on the retailer website."}</p>{analyticsEnabled && <p>We count anonymous searches, errors, and retailer clicks. We do not store your query or photo.</p>}</div>
+        </div>
+      </footer>
+    </>
   );
 }
