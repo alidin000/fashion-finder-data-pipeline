@@ -13,5 +13,6 @@ Point-in-time engineering review, 2026-10-12. Re-check before copying code or re
 | pull-bear | https://github.com/byteer228eaglepro/pull-bear | No explicit licence found in review | Do not copy without permission; implement an independent adapter |
 | google-shopping-scraper | https://github.com/data-scrape/google-shopping-scraper | MIT | Optional experiment; inspect dependencies and output |
 | Crinibus/scraper | https://github.com/Crinibus/scraper | MIT | Reference for price-history structure |
+| Phosphor Icons (@phosphor-icons/core 2.1.1) | https://github.com/phosphor-icons/phosphor-core | MIT | Added 2026-11-02: regular-weight icon paths copied into `web/app/_components/icons.tsx` and the select caret in `web/app/globals.css`; keep the MIT notice in `icons.tsx` |
 
 This is not legal advice. The table records source-code licence observations only; these licences do not grant rights to collected retailer data, product photos or website access.
